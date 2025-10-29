@@ -40,7 +40,7 @@ After a teacher signs in, create/update their users/{uid} document with { role: 
 
 Student flow
 1) Student enters quiz password (guard), must be offline per exam rules
-2) Student enters ID, email @klh.edu.in, password, and begins
+2) Student enters ID, email, password, and begins
 3) App signs in or creates student account, stores profile in users/{uid}, starts attempt, loads questions
 4) Answers are saved with debounce; offline cache is supported for questions and queued answers
 
