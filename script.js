@@ -679,10 +679,10 @@ document.addEventListener("DOMContentLoaded", function () {
                 <input id="full-name" type="text" maxlength="100" placeholder="e.g. John Doe" style="width:100%;padding:12px;border-radius:10px;border:1px solid #d1d5db;outline:none;">
               </div>
 
-              <div style="margin-bottom:10px;">
-                <label style="display:block;font-weight:600;margin-bottom:6px;">Email (must end with @klh.edu.in)</label>
-                <input id="email" type="email" placeholder="name@klh.edu.in" style="width:100%;padding:12px;border-radius:10px;border:1px solid #d1d5db;outline:none;">
-              </div>
+                            <div style="margin-bottom:10px;">
+                                <label style="display:block;font-weight:600;margin-bottom:6px;">Email</label>
+                                <input id="email" type="email" placeholder="name@example.com" style="width:100%;padding:12px;border-radius:10px;border:1px solid #d1d5db;outline:none;">
+                            </div>
 
               <div style="margin-bottom:4px; position:relative;">
                 <label style="display:block;font-weight:600;margin-bottom:6px;">Password</label>
@@ -759,8 +759,10 @@ document.addEventListener("DOMContentLoaded", function () {
             pwEl.setAttribute('type', t);
         });
 
-        function validateEmailDomain(email) {
-            return /^([^\s@]+)@klh\.edu\.in$/i.test(String(email||'').trim());
+        function isValidEmail(email) {
+            const v = String(email||'').trim();
+            // Basic RFC 5322-lite email pattern
+            return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);
         }
 
         async function identifyAndProceed(user, extraName) {
@@ -800,8 +802,8 @@ document.addEventListener("DOMContentLoaded", function () {
             errorBox.style.display = 'none';
             const email = emailEl.value.trim();
             const pw = pwEl.value.trim();
-            if (!validateEmailDomain(email)) {
-                errorBox.textContent = 'Email must end with @klh.edu.in';
+            if (!isValidEmail(email)) {
+                errorBox.textContent = 'Please enter a valid email address';
                 errorBox.style.display = 'block';
                 return;
             }
@@ -832,10 +834,6 @@ document.addEventListener("DOMContentLoaded", function () {
             try {
                 const helpers = window.firebaseAuthHelpers;
                 const user = await helpers.signInWithGoogle();
-                if (!validateEmailDomain(user.email)) {
-                    await helpers.signOut();
-                    throw new Error('Only KLH emails are allowed');
-                }
                 await identifyAndProceed(user);
             } catch (e) {
                 errorBox.textContent = e && e.message ? e.message : 'Google sign-in failed';
@@ -847,8 +845,8 @@ document.addEventListener("DOMContentLoaded", function () {
             ev.preventDefault();
             errorBox.style.display = 'none';
             const email = emailEl.value.trim();
-            if (!validateEmailDomain(email)) {
-                errorBox.textContent = 'Enter your KLH email to receive reset link';
+            if (!isValidEmail(email)) {
+                errorBox.textContent = 'Enter your email to receive reset link';
                 errorBox.style.display = 'block';
                 return;
             }
