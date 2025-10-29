@@ -1,0 +1,53 @@
+# Compiled files
+*.class
+*.jar
+!java-backend/target/*.jar
+*.war
+*.ear
+
+# Maven
+java-backend/target/
+java-backend/.mvn/
+java-backend/mvnw
+java-backend/mvnw.cmd
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+
+# Node modules
+node_modules/
+package-lock.json
+
+# Environment files
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+
+# Database exports (optional, keep if you want)
+# quiz_system_export.sql
+
+# Executables (not needed in cloud)
+*.exe
+cloudflared.exe
+
+# Batch files (local only)
+*.bat
+
+# Backup files
+*.bak
+*.backup

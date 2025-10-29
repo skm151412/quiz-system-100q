@@ -1,0 +1,30 @@
+{
+  "hosting": {
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**",
+      "java-backend/**",
+      "target/**",
+      "**/*.sql",
+      "*.bat",
+      "**/*.exe",
+      "**/*.zip",
+      "*.sh",
+      "Procfile",
+      "Dockerfile",
+      "render.yaml",
+      "railway.json",
+      "**/*.md"
+    ],
+    "headers": [
+      {
+        "source": "**/*.@(css|js|png|jpg|jpeg|gif|svg)",
+        "headers": [
+          { "key": "Cache-Control", "value": "public,max-age=604800,immutable" }
+        ]
+      }
+    ]
+  }
+}
