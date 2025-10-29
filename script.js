@@ -464,8 +464,8 @@ document.addEventListener("DOMContentLoaded", function () {
     // Initialize quiz
     async function initializeQuiz() {
         try {
-            // Show prerequisite screen
-            showPrerequisites();
+            // Show authentication first, then prerequisites
+            showUserIdentificationPage();
         } catch (error) {
             console.error('Quiz initialization error:', error);
             alert('Failed to initialize quiz. Please refresh the page.');
@@ -619,8 +619,12 @@ document.addEventListener("DOMContentLoaded", function () {
             updateFlightModeIndicator();
             updateQuizStartButton();
             
-            // Note: We no longer block here. If online, students can log in/sign up first.
-            // We'll enforce going offline right before starting the quiz.
+            // After final check, verify if we're offline
+            if (connectionStatus.online) {
+                alert('❗ Please turn off your internet connection (enable flight mode) before starting the quiz.');
+                console.log('Quiz start blocked: Connection detected');
+                return;
+            }
 
             const password = document.getElementById('quiz-password').value;
             const errorDiv = document.getElementById('password-error');
@@ -632,10 +636,10 @@ document.addEventListener("DOMContentLoaded", function () {
                 return;
             }
 
-            console.log('Password verified locally – proceeding to user identification page');
-            // Show user ID & role selection overlay instead of starting immediately
+            console.log('Password verified locally – proceeding to start quiz flow');
+            // At this stage, user is already authenticated; proceed to load quiz
             prerequisiteDiv.remove();
-            showUserIdentificationPage();
+            loadQuizData();
         };
     }
 
@@ -644,48 +648,29 @@ document.addEventListener("DOMContentLoaded", function () {
         const userDiv = document.createElement('div');
         userDiv.classList.add('user-identification');
         userDiv.innerHTML = `
-            <div class="prerequisite-content" style="max-width: 560px;">
-                <h2 style="margin-bottom:10px;">Account</h2>
-                <div class="auth-tabs" style="display:flex; gap:8px; justify-content:center; margin-bottom:12px;">
-                  <button id="tab-login" class="btn" style="background:#2196F3;">Login</button>
-                  <button id="tab-signup" class="btn" style="background:#555;">Sign Up</button>
-                </div>
-
-                <div id="login-section" style="display:block; margin-top:10px;">
-                  <label style="display:flex; flex-direction:column; font-weight:600;">
-                    Email
-                    <input type="email" id="login-email" placeholder="name@klh.edu.in" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
-                  </label>
-                  <label style="display:flex; flex-direction:column; font-weight:600;">
-                    Password
-                    <input type="password" id="login-password" placeholder="Enter password" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
-                  </label>
-                  <button id="login-btn" class="btn" style="padding:10px 16px; background:#27ae60; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:15px; width:100%;">Login</button>
-                  <div id="login-error" style="display:none; color:#ff6b6b; font-weight:600; margin-top:8px;" aria-live="polite"></div>
-                </div>
-
-                <div id="signup-section" style="display:none; margin-top:10px;">
-                  <p style="margin-top:0;">Enter your details, then select your role to create an account.</p>
-                  <div style="display:flex; flex-direction:column; gap:12px;">
+            <div class="prerequisite-content" style="max-width: 520px;">
+                <h2>User Identification</h2>
+                <p style="margin-top:0;">Enter your User ID and (optionally) basic details, then select your role to begin.</p>
+                <div style="margin:15px 0; display:flex; flex-direction:column; gap:12px;">
                     <label style="display:flex; flex-direction:column; font-weight:600;">
-                        User ID (number required)
-                        <input type="number" id="user-id-input" min="1" placeholder="e.g. 2410030001" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
+                        User ID (number required):
+                        <input type="number" id="user-id-input" min="1" placeholder="e.g. 42" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
                     </label>
                     <label style="display:flex; flex-direction:column; font-weight:600;">
-                        Username (optional)
+                        Username (optional):
                         <input type="text" id="user-username-input" maxlength="50" placeholder="e.g. jdoe" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
                     </label>
                     <label style="display:flex; flex-direction:column; font-weight:600;">
-                        Full Name (optional)
+                        Full Name (optional):
                         <input type="text" id="user-fullname-input" maxlength="100" placeholder="e.g. John Doe" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
                     </label>
                     <label style="display:flex; flex-direction:column; font-weight:600;">
-                        Email (must end with @klh.edu.in)
+                        Email (required, must end with @klh.edu.in):
                         <input type="email" id="user-email-input" maxlength="120" placeholder="e.g. name@klh.edu.in" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
                     </label>
                     <label style="display:flex; flex-direction:column; font-weight:600;">
-                        Password (min 6 chars)
-                        <input type="password" id="user-password-input" maxlength="120" placeholder="Choose a password" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
+                        Password (required for sign-in):
+                        <input type="password" id="user-password-input" maxlength="120" placeholder="Choose or enter your password" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
                     </label>
                     <fieldset style="border:1px solid #444; border-radius:6px; padding:10px;">
                         <legend style="padding:0 6px; font-weight:600;">Role</legend>
@@ -696,17 +681,9 @@ document.addEventListener("DOMContentLoaded", function () {
                             <input type="radio" name="user-role" value="teacher"> Teacher
                         </label>
                     </fieldset>
-                    <button id="signup-btn" class="btn" style="padding:10px 16px; background:#27ae60; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:15px;">Create Account</button>
+                    
+                    <button id="confirm-user-btn" style="padding:10px 16px; background:#27ae60; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:15px;">Begin Quiz</button>
                     <div id="user-setup-error" style="display:none; color:#ff6b6b; font-weight:600;" aria-live="polite"></div>
-                  </div>
-                </div>
-
-                <div style="margin-top:14px; font-size:12px; color:#ccc; text-align:center;">
-                  Tip: You can log in or sign up while online. Turn OFF internet before starting the quiz.
-                </div>
-                <div style="display:flex; justify-content:center; gap:10px; margin-top:12px;">
-                  <button id="confirm-user-btn" class="btn" style="background:#27ae60;">Begin Quiz</button>
-                  <button id="close-auth" class="btn" style="background:#555;">Close</button>
                 </div>
             </div>
         `;
@@ -719,27 +696,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
         document.body.appendChild(userDiv);
 
-                // Tabs toggle
-                const loginTab = userDiv.querySelector('#tab-login');
-                const signupTab = userDiv.querySelector('#tab-signup');
-                const loginSection = userDiv.querySelector('#login-section');
-                const signupSection = userDiv.querySelector('#signup-section');
-                function switchMode(mode){
-                    if(mode==='login'){
-                        loginSection.style.display='block'; signupSection.style.display='none';
-                        loginTab.style.background='#2196F3'; signupTab.style.background='#555';
-                    }else{
-                        loginSection.style.display='none'; signupSection.style.display='block';
-                        loginTab.style.background='#555'; signupTab.style.background='#2196F3';
-                    }
-                }
-                loginTab.addEventListener('click', ()=>switchMode('login'));
-                signupTab.addEventListener('click', ()=>switchMode('signup'));
-
-                // Close
-                userDiv.querySelector('#close-auth').addEventListener('click', ()=>{ userDiv.remove(); });
-
-                // Role UI has no separate teacher password; authorization is via Firebase Auth + role in Firestore
+        // Role UI has no separate teacher password; authorization is via Firebase Auth + role in Firestore
 
         document.getElementById('confirm-user-btn').addEventListener('click', async () => {
             const userIdInput = document.getElementById('user-id-input');
@@ -804,12 +761,19 @@ document.addEventListener("DOMContentLoaded", function () {
             currentUserFullName = fullnameInput.value.trim() || null;
             currentUserEmail = emailInput.value.trim() || null;
 
-            // SIGN UP: Authenticate with Firebase; prevent duplicate emails; store profile in Firestore via API shim
+            // Authenticate with Firebase; students can self-register, teachers must pre-exist
             try {
                 const helpers = window.firebaseAuthHelpers;
                 const auth = window.firebaseAuth;
-                // Creating a new account
-                await helpers.createUserWithEmailAndPassword(currentUserEmail, pw);
+                try {
+                    await helpers.signInWithEmailAndPassword(currentUserEmail, pw);
+                } catch (e) {
+                    if (isStudent && /auth\/user-not-found/.test(e.message)) {
+                        await helpers.createUserWithEmailAndPassword(currentUserEmail, pw);
+                    } else {
+                        throw e;
+                    }
+                }
                 const savedUser = await apiCall('/users/identify', 'POST', {
                     username: currentUsername || String(currentUserId),
                     email: currentUserEmail,
@@ -820,15 +784,7 @@ document.addEventListener("DOMContentLoaded", function () {
                 currentUserId = savedUser && savedUser.id ? savedUser.id : (auth && auth.currentUser ? auth.currentUser.uid : null);
                 console.log('User record persisted/identified:', savedUser);
             } catch (persistErr) {
-                const msg = String(persistErr && persistErr.message || persistErr);
-                if (/auth\/email-already-in-use/.test(msg)){
-                  errorBox.textContent = 'This email is already registered. Please login instead.';
-                } else if (/auth\//.test(msg)){
-                  errorBox.textContent = 'Authentication failed: ' + msg.replace('Firebase: ','');
-                } else {
-                  errorBox.textContent = 'Failed to create account: ' + msg;
-                }
-                errorBox.style.display = 'block';
+                console.warn('User identify call failed, proceeding anyway:', persistErr.message);
                 // Queue user payload for sync when back online
                 try {
                     offlineUserPayload = {
@@ -841,7 +797,6 @@ document.addEventListener("DOMContentLoaded", function () {
                     };
                     persistOfflineUserPayload();
                 } catch(_){}
-                return; // stop on error
             }
 
             console.log('User identification confirmed:', { currentUserId, currentUserRole, currentUsername, currentUserFullName, currentUserEmail });
@@ -854,46 +809,9 @@ document.addEventListener("DOMContentLoaded", function () {
             }
 
             userDiv.remove();
-                        // Enforce offline before starting quiz
-                        if (navigator.onLine) {
-                                alert('Please turn OFF internet to begin the quiz. You are logged in—come back after enabling flight mode.');
-                                return;
-                        }
-                        await loadQuizData();
+            // After successful login/identification, show prerequisites next
+            showPrerequisites();
         });
-
-                // LOGIN handler
-                userDiv.querySelector('#login-btn').addEventListener('click', async ()=>{
-                    const email = userDiv.querySelector('#login-email').value.trim();
-                    const pw = userDiv.querySelector('#login-password').value.trim();
-                    const err = userDiv.querySelector('#login-error');
-                    err.style.display = 'none';
-                    if (!email || !pw) { err.textContent='Email and password required.'; err.style.display='block'; return; }
-                    try{
-                        const helpers = window.firebaseAuthHelpers;
-                        await helpers.signInWithEmailAndPassword(email, pw);
-                        // Read role from Firestore
-                        const { getDoc, doc } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
-                        const uid = window.firebaseAuth.currentUser.uid;
-                        const snap = await getDoc(doc(window.firebaseDb, 'users', uid));
-                        currentUserRole = snap.exists() ? (snap.data().role || 'student') : 'student';
-                        currentUserId = uid;
-                        // Ensure profile exists
-                        await apiCall('/users/identify','POST',{ email, role: currentUserRole });
-                        if (currentUserRole === 'teacher') {
-                            userDiv.remove();
-                            window.location.href = 'teacher.html';
-                            return;
-                        }
-                        alert('Login successful. Turn OFF internet to start the quiz.');
-                    } catch(e){
-                        const msg = String(e && e.message || e);
-                        if (/auth\/user-not-found/.test(msg)) err.textContent = 'No account found. Please Sign Up.';
-                        else if (/auth\/wrong-password/.test(msg)) err.textContent = 'Incorrect password.';
-                        else err.textContent = 'Login failed: ' + msg.replace('Firebase: ','');
-                        err.style.display='block';
-                    }
-                });
     }
     // Load quiz data from backend
     async function loadQuizData() {
@@ -934,13 +852,7 @@ document.addEventListener("DOMContentLoaded", function () {
                 const subjectId = q.subjectId || q.subject_id;
                 const subject = subjectById.get(subjectId) || { id: subjectId, name: q.subjectName || 'Subject', color: q.subjectColor || subjectColors[subjectId] || '#999' };
                 const optionsRaw = allOptions[idx] || [];
-                // Shuffle options per question while preserving ids and correctness mapping
-                const shuffledOptionsRaw = [...optionsRaw];
-                for (let i = shuffledOptionsRaw.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    [shuffledOptionsRaw[i], shuffledOptionsRaw[j]] = [shuffledOptionsRaw[j], shuffledOptionsRaw[i]];
-                }
-                const options = shuffledOptionsRaw.map(o => ({
+                const options = optionsRaw.map(o => ({
                     id: o.id,
                     option_text: o.optionText || o.option_text,
                     is_correct: (o.isCorrect !== undefined ? o.isCorrect : o.is_correct)
@@ -948,23 +860,13 @@ document.addEventListener("DOMContentLoaded", function () {
                 return {
                     id: q.id,
                     subject_id: subjectId,
-                    // order_num will be reassigned after shuffling questions
                     order_num: q.orderNum || q.order_num || (idx + 1),
                     question_text: q.questionText || q.question_text,
                     options
                 };
             });
 
-            // Shuffle entire question set for full randomization
-            const randomizedQuestions = [...adaptedQuestions];
-            for (let i = randomizedQuestions.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [randomizedQuestions[i], randomizedQuestions[j]] = [randomizedQuestions[j], randomizedQuestions[i]];
-            }
-            // Re-number questions according to new order
-            randomizedQuestions.forEach((q, idx) => { q.order_num = idx + 1; });
-
-            const uniqueSubjectIds = [...new Set(randomizedQuestions.map(q => q.subject_id))];
+            const uniqueSubjectIds = [...new Set(adaptedQuestions.map(q => q.subject_id))];
             const adaptedSubjects = uniqueSubjectIds.map(id => {
                 const s = subjectById.get(id);
                 return {
@@ -975,9 +877,9 @@ document.addEventListener("DOMContentLoaded", function () {
             });
 
             quizData = {
-                questions: randomizedQuestions,
+                questions: adaptedQuestions,
                 subjects: adaptedSubjects,
-                total_questions: randomizedQuestions.length
+                total_questions: adaptedQuestions.length
             };
 
             console.log(`Loaded ${quizData.total_questions} questions from database`);
@@ -1069,19 +971,17 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!container) return;
         container.innerHTML = '';
 
-        // Build map subjectId -> questions preserving the randomized global order
+        // Determine subjects & ranges from quizData (fallback to fixed chunk of 25)
+        // Build map subjectId -> questions (sorted by order_num)
         const bySubject = new Map();
-        const firstIndex = new Map();
-        quizData.questions.forEach((q, idx) => {
-            if (!bySubject.has(q.subject_id)) {
-                bySubject.set(q.subject_id, []);
-                firstIndex.set(q.subject_id, idx);
-            }
+        quizData.questions.forEach(q => {
+            if (!bySubject.has(q.subject_id)) bySubject.set(q.subject_id, []);
             bySubject.get(q.subject_id).push(q);
         });
+        bySubject.forEach(arr => arr.sort((a,b)=>a.order_num-b.order_num));
 
-        // Order subjects by first appearance in the randomized sequence
-        const subjectEntries = [...bySubject.entries()].sort((a,b)=>firstIndex.get(a[0]) - firstIndex.get(b[0]));
+        // Sort subject order by first question order_num
+        const subjectEntries = [...bySubject.entries()].sort((a,b)=>a[1][0].order_num - b[1][0].order_num);
 
         subjectEntries.forEach(([subjectId, questions]) => {
             const subjectMeta = quizData.subjects.find(s=>s.id===subjectId) || { name: `Subject ${subjectId}` };
