@@ -9,14 +9,15 @@
       "target/**",
       "**/*.sql",
       "*.bat",
-      "**/*.exe",
-      "**/*.zip",
-      "*.sh",
-      "Procfile",
-      "Dockerfile",
+      "cloudflared.exe",
+      "ngrok.zip",
       "render.yaml",
-      "railway.json",
-      "**/*.md"
+      "RENDER_DEPLOY_NOW.md",
+      "DEPLOY_RENDER_COMPLETE.md",
+      "DEPLOY_RAILWAY.md",
+      "Procfile",
+      "build.sh",
+      "convert_mysql_to_postgres.py"
     ],
     "headers": [
       {
@@ -24,7 +25,20 @@
         "headers": [
           { "key": "Cache-Control", "value": "public,max-age=604800,immutable" }
         ]
+      },
+      {
+        "source": "**",
+        "headers": [
+          { "key": "Strict-Transport-Security", "value": "max-age=31536000; includeSubDomains; preload" },
+          { "key": "X-Content-Type-Options", "value": "nosniff" },
+          { "key": "Referrer-Policy", "value": "no-referrer" },
+          { "key": "Permissions-Policy", "value": "geolocation=(), microphone=(), camera=(), payment=()" },
+          { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" }
+        ]
       }
     ]
+  },
+  "firestore": {
+    "rules": "firestore.rules"
   }
 }

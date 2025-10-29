@@ -1,23 +1,45 @@
 // Teacher dashboard script
 (function(){
-  // Backend base selection mirrors student app behavior
-  const HOST = (location.hostname && location.hostname !== '') ? location.hostname : '127.0.0.1';
-  const IS_LOCAL = (HOST === 'localhost' || HOST === '127.0.0.1');
-  // If window.QUIZ_BACKEND_BASE is set (via backend-origin.js), use it; otherwise:
-  // - local dev: http://<host>:8081/api
-  // - production: '/api' (only valid if Firebase rewrites are configured)
-  const API_BASE = (window.QUIZ_BACKEND_BASE)
-    ? `${window.QUIZ_BACKEND_BASE}/api`
-    : (IS_LOCAL ? `http://${HOST}:8081/api` : '/api');
+  // Require Firebase Auth; redirect if not authenticated or not teacher
+  const auth = window.firebaseAuth;
+  const db = window.firebaseDb;
+  if (!auth) { location.href = 'index.html'; return; }
 
-  // Retrieve teacher context from sessionStorage (set in script.js after identification)
-  const teacherCtx = JSON.parse(sessionStorage.getItem('teacherCtx')||'{}');
-  if(!teacherCtx.userId || teacherCtx.role !== 'teacher') {
-    alert('Unauthorized: teacher session not found');
-    location.href = 'index.html';
-    return;
+  function setHeaderUser(emailOrName){
+    const el = document.getElementById('teacherEmail');
+    if (el) el.textContent = emailOrName || '';
   }
-  document.getElementById('teacherEmail').textContent = teacherCtx.email || teacherCtx.username || ('ID '+teacherCtx.userId);
+
+  async function ensureTeacherOrRedirect(user){
+    try {
+      // Merge minimal profile
+      await window.firebaseApiCall('/users/identify','POST', { role: 'teacher' });
+    } catch(_) {}
+    try {
+      // Fetch role via Firestore
+      const uid = user.uid;
+      // Direct Firestore read using SDK to check role
+      const { getDoc, doc } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+      const snap = await getDoc(doc(db, 'users', uid));
+      const role = snap.exists() ? (snap.data().role || 'student') : 'student';
+      if (role !== 'teacher') {
+        alert('Unauthorized: teacher role required');
+        location.href = 'index.html';
+        return false;
+      }
+      setHeaderUser(user.email || user.displayName || '');
+      return true;
+    } catch (e) {
+      console.error('Role check failed', e);
+      location.href = 'index.html';
+      return false;
+    }
+  }
+
+  window.firebaseAuthHelpers.onAuthStateChanged(async (user)=>{
+    if (!user) { location.href = 'index.html'; return; }
+    await ensureTeacherOrRedirect(user);
+  });
 
   // Tab switching
   const navButtons = document.querySelectorAll('nav button[data-tab]');
@@ -28,45 +50,19 @@
     document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
     if(btn.dataset.tab==='attempts') loadAttempts();
     if(btn.dataset.tab==='addq') loadQuizAndSubjects(); // Load quizzes and subjects when tab switched
+    if(btn.dataset.tab==='users') loadUsers();
   }));
 
-  document.getElementById('logoutBtn').addEventListener('click',()=>{
-    sessionStorage.removeItem('teacherCtx');
+  document.getElementById('logoutBtn').addEventListener('click',async ()=>{
+    try { await window.firebaseAuthHelpers.signOut(); } catch(_) {}
     location.href='index.html';
   });
 
   async function api(endpoint, options={}) {
-    const url = API_BASE+endpoint + (endpoint.includes('?')?'&':'?') + 'userId='+encodeURIComponent(teacherCtx.userId);
-    const opt = Object.assign({headers:{'Content-Type':'application/json'}}, options);
-    const res = await fetch(url,opt);
-    
-    if(!res.ok) {
-      const responseText = await res.text();
-      let errorMessage = `${res.status}`;
-      
-      // Try to parse JSON error response
-      try {
-        if (responseText && responseText.includes('{')) {
-          const errorJson = JSON.parse(responseText);
-          if (errorJson.message) {
-            errorMessage = errorJson.message;
-          } else if (errorJson.error) {
-            errorMessage = errorJson.error;
-          }
-        } else if (responseText) {
-          errorMessage += ': ' + responseText;
-        }
-      } catch (e) {
-        // If parsing fails, use the raw text
-        errorMessage += ': ' + responseText;
-      }
-      
-      throw new Error(errorMessage);
-    }
-    
-    if(res.status===204) return null;
-    const ct = res.headers.get('content-type')||'';
-    return ct.includes('json')?res.json():res.text();
+    // Always route to Firebase shim; teacher role enforced by rules
+    const method = (options && options.method) || 'GET';
+    const body = (options && options.body) || null;
+    return await window.firebaseApiCall(endpoint, method, body);
   }
 
   // Attempts table logic
@@ -288,8 +284,32 @@
     }
   }
 
-  // Initial load
-  loadAttempts();
-  // Also load quiz and subject data initially 
-  loadQuizAndSubjects();
+  // Initial load (after auth state handler runs)
+  window.firebaseAuthHelpers.onAuthStateChanged((user)=>{
+    if (!user) return;
+    loadAttempts();
+    loadQuizAndSubjects();
+    loadUsers();
+  });
+
+  async function loadUsers(){
+    try {
+      const list = await api('/teacher/users');
+      const tbody = document.querySelector('#usersTable tbody');
+      if (!tbody) return;
+      tbody.innerHTML = (list||[]).map(u=>`<tr>
+        <td>${escapeHtml(String(u.id))}</td>
+        <td>${escapeHtml(u.username||'-')}</td>
+        <td>${escapeHtml(u.fullName||'-')}</td>
+        <td>${escapeHtml(u.email||'-')}</td>
+        <td>${escapeHtml(u.role||'student')}</td>
+        <td>${u.attemptsCount||0}</td>
+        <td>${u.bestScore!=null?u.bestScore: '-'}</td>
+        <td>${u.lastScore!=null?u.lastScore: '-'}</td>
+        <td class="nowrap">${fmtDate(u.lastAttemptAt)}</td>
+      </tr>`).join('');
+    } catch(e){
+      console.error('Failed to load users', e);
+    }
+  }
 })();

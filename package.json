@@ -1,0 +1,12 @@
+{
+  "name": "quiz-system-100q",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Firebase-only deployment for quiz system with Firestore migration script.",
+  "scripts": {
+    "migrate": "node migrations/migrate_to_firestore.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.5.0"
+  }
+}

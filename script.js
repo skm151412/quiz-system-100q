@@ -27,10 +27,8 @@ document.addEventListener("DOMContentLoaded", function () {
     let currentUsername = null;
     let currentUserFullName = null;
     let currentUserEmail = null;
-    const TEACHER_ROLE_PASSWORD = 'teacher123'; // required when role is teacher
-
-    const quizPassword = "123"; // Default password for the quiz
-    const authorPassword = "123"; // Password for showing answers
+    const quizPassword = "123"; // Default password for the quiz (guard only)
+    const authorPassword = "123"; // Password for showing answers (author-only)
 
     // Timer setup - will be set from database
     let timeLeft = 90 * 60; // Default 90 minutes in seconds
@@ -100,12 +98,9 @@ document.addEventListener("DOMContentLoaded", function () {
         // We'll do a direct test to known external resources with actual fetch
         // and consider it offline ONLY if ALL external resource tests fail
         
-        // Define some reliable external resources to check
-        const testUrls = [
-            'https://www.google.com/generate-204',
-            'https://www.cloudflare.com/cdn-cgi/trace',
-            'https://www.bing.com'
-        ];
+        // Prefer a same-origin, cache-busted health endpoint for connectivity check
+        const origin = location.origin || '';
+        const testUrls = [ `${origin}/health.txt` ];
         
         // Create a fetch promise for each URL with a short timeout
         const fetchPromises = testUrls.map(url => {
@@ -211,10 +206,220 @@ document.addEventListener("DOMContentLoaded", function () {
     window.addEventListener('offline', updateConnectionStatus);
 
     // Periodically check connection status
-    setInterval(checkInternetConnection, 3000); // Check every 3 seconds
+    setInterval(checkInternetConnection, 12000); // Lighter: check every 12 seconds
 
     // API helper functions
+    // Ensure we don't fall back to /api when Firebase shim hasn't finished loading yet
+    function waitForFirebaseApi(timeoutMs = 5000) {
+        return new Promise((resolve, reject) => {
+            if (window.FIREBASE_MODE && typeof window.firebaseApiCall === 'function') {
+                return resolve();
+            }
+            let settled = false;
+            const onReady = () => {
+                if (!settled) {
+                    settled = true;
+                    window.removeEventListener('firebaseApiReady', onReady);
+                    resolve();
+                }
+            };
+            window.addEventListener('firebaseApiReady', onReady, { once: true });
+            const t = setTimeout(() => {
+                if (!settled) {
+                    settled = true;
+                    window.removeEventListener('firebaseApiReady', onReady);
+                    // Resolve anyway so caller can decide fallback behavior
+                    resolve();
+                }
+            }, timeoutMs);
+        });
+    }
+
+    // Simple offline cache for quiz data (prefetched while online)
+    const quizCache = {
+        loaded: false,
+        subjects: [],
+        questions: [],
+        optionsByQid: {}
+    };
+
+    // Load cache from localStorage if present
+    try {
+        const cached = JSON.parse(localStorage.getItem('quizCache_v1') || 'null');
+        if (cached && cached.questions && cached.subjects && cached.optionsByQid) {
+            Object.assign(quizCache, cached, { loaded: true });
+            console.log('[offline-cache] Restored quiz cache from localStorage');
+        }
+    } catch (_) {}
+
+    async function prefetchQuizDataIfOnline() {
+        if (!navigator.onLine) return; // only prefetch when online
+        try {
+            await waitForFirebaseApi(5000);
+            if (typeof window.firebaseApiCall !== 'function') return;
+            console.log('[offline-cache] Prefetching quiz data...');
+            const [subjects, questions] = await Promise.all([
+                window.firebaseApiCall('/quiz/subjects', 'GET'),
+                window.firebaseApiCall('/quiz/1/questions', 'GET')
+            ]);
+            const optionsByQidEntries = await Promise.all(questions.map(async q => {
+                const opts = await window.firebaseApiCall(`/quiz/questions/${q.id}/options`, 'GET');
+                return [String(q.id), opts];
+            }));
+            const optionsByQid = Object.fromEntries(optionsByQidEntries);
+            quizCache.subjects = Array.isArray(subjects) ? subjects : [];
+            quizCache.questions = Array.isArray(questions) ? questions : [];
+            quizCache.optionsByQid = optionsByQid;
+            quizCache.loaded = true;
+            try {
+                localStorage.setItem('quizCache_v1', JSON.stringify({
+                    subjects: quizCache.subjects,
+                    questions: quizCache.questions,
+                    optionsByQid: quizCache.optionsByQid
+                }));
+            } catch (_) {}
+            console.log(`[offline-cache] Prefetched ${quizCache.questions.length} questions`);
+        } catch (e) {
+            console.warn('[offline-cache] Prefetch failed:', e.message || e);
+        }
+    }
+
+    // attempt answers buffer for offline mode
+    const offlineAttempt = {
+        id: null,
+        answers: {},
+        completed: false,
+        result: null,
+        synced: false,
+        remoteAttemptId: null
+    };
+    let offlineUserPayload = null; // queued identification when offline
+
+    // Restore any persisted offline state
+    try {
+        const saved = JSON.parse(localStorage.getItem('offline_attempt_v1')||'null');
+        if (saved && typeof saved === 'object') Object.assign(offlineAttempt, saved);
+        const savedUser = JSON.parse(localStorage.getItem('offline_user_payload_v1')||'null');
+        if (savedUser) offlineUserPayload = savedUser;
+    } catch(_){}
+
+    function persistOfflineAttempt(){
+        try { localStorage.setItem('offline_attempt_v1', JSON.stringify(offlineAttempt)); } catch(_){}
+    }
+    function persistOfflineUserPayload(){
+        try { localStorage.setItem('offline_user_payload_v1', JSON.stringify(offlineUserPayload)); } catch(_){}
+    }
+
+    async function flushOfflineToFirestore(){
+        if (!navigator.onLine) return false;
+        await waitForFirebaseApi(7000);
+        if (typeof window.firebaseApiCall !== 'function') return false;
+        try {
+            // Identify user first if queued
+            if (offlineUserPayload) {
+                try {
+                    const savedUser = await window.firebaseApiCall('/users/identify','POST', offlineUserPayload);
+                    if (savedUser && savedUser.id) {
+                        currentUserId = savedUser.id;
+                    }
+                    offlineUserPayload = null;
+                    persistOfflineUserPayload();
+                } catch(e){ /* keep queued */ }
+            }
+
+            if (offlineAttempt.id && !offlineAttempt.synced) {
+                const started = await window.firebaseApiCall(`/quiz/1/start`, 'POST');
+                const remoteId = started && (started.id || started.attemptId || started.attempt_id);
+                if (!remoteId) return false;
+                offlineAttempt.remoteAttemptId = remoteId;
+                for (const [qid, sel] of Object.entries(offlineAttempt.answers||{})){
+                    await window.firebaseApiCall(`/quiz/attempts/${remoteId}/answer`, 'POST', {
+                        questionId: qid,
+                        selectedOptionId: sel
+                    });
+                }
+                if (offlineAttempt.completed) {
+                    await window.firebaseApiCall(`/quiz/attempts/${remoteId}/complete`, 'POST');
+                }
+                offlineAttempt.synced = true;
+                persistOfflineAttempt();
+            }
+            return true;
+        } catch (e) {
+            console.warn('[offline-sync] flush failed:', e.message||e);
+            return false;
+        }
+    }
+    window.addEventListener('online', () => { flushOfflineToFirestore(); });
+
     async function apiCall(endpoint, method = 'GET', body = null) {
+        // In Firebase-only mode, route through firebase-api shim (wait for it if needed)
+        if (window.FIREBASE_MODE) {
+            if (typeof window.firebaseApiCall !== 'function') {
+                await waitForFirebaseApi(7000);
+            }
+            // If offline, serve from cache for supported endpoints
+            if (!navigator.onLine) {
+                const path = endpoint.split('?')[0];
+                // GET subjects/questions/options from cache
+                if (method === 'GET' && path === '/quiz/subjects') {
+                    if (!quizCache.loaded) throw new Error('Offline: quiz not cached yet');
+                    return quizCache.subjects.length ? quizCache.subjects : [
+                        { id: 1, name: 'DBMS', color: '#000000' },
+                        { id: 2, name: 'FEDF', color: '#FF6B6B' },
+                        { id: 3, name: 'OOP', color: '#4ECDC4' },
+                        { id: 4, name: 'OS',  color: '#45B7D1' }
+                    ];
+                }
+                if (method === 'GET' && path === '/quiz/1/questions') {
+                    if (!quizCache.loaded) throw new Error('Offline: quiz not cached yet');
+                    return quizCache.questions;
+                }
+                const optMatch = path.match(/^\/quiz\/questions\/(.+)\/options$/);
+                if (method === 'GET' && optMatch) {
+                    if (!quizCache.loaded) throw new Error('Offline: quiz not cached yet');
+                    return quizCache.optionsByQid[String(optMatch[1])] || [];
+                }
+                // POST start -> fabricate attempt id locally
+                if (method === 'POST' && /^\/quiz\/1\/start$/.test(path)) {
+                    offlineAttempt.id = 'local-' + Date.now();
+                    offlineAttempt.answers = {};
+                    return { id: offlineAttempt.id };
+                }
+                // POST answer -> store locally
+                const ansMatch = path.match(/^\/quiz\/attempts\/(.+)\/answer$/);
+                if (method === 'POST' && ansMatch) {
+                    const payload = (typeof body === 'string') ? JSON.parse(body || '{}') : (body || {});
+                    const qid = payload.questionId ?? payload.question_id;
+                    const selected = payload.selectedOptionId ?? payload.selected_id ?? payload.selectedIndex;
+                    if (qid == null) throw new Error('Offline: missing questionId');
+                    offlineAttempt.answers[String(qid)] = selected;
+                    return { ok: true };
+                }
+                // POST complete -> compute score from cache
+                const compMatch = path.match(/^\/quiz\/attempts\/(.+)\/complete$/);
+                if (method === 'POST' && compMatch) {
+                    if (!quizCache.loaded) throw new Error('Offline: quiz not cached yet');
+                    let correct = 0;
+                    const total = quizCache.questions.length;
+                    for (const q of quizCache.questions) {
+                        const sel = offlineAttempt.answers[String(q.id)];
+                        const opts = quizCache.optionsByQid[String(q.id)] || [];
+                        const chosen = opts.find(o => String(o.id) === String(sel));
+                        if (chosen && (chosen.isCorrect === true || chosen.is_correct === true)) correct++;
+                    }
+                    return { correctAnswers: correct, totalQuestions: total, score: Math.round((correct * 100) / (total || 1)) };
+                }
+                // Any other endpoint not supported offline
+                throw new Error('Offline: endpoint not available');
+            }
+            // Online normal path via firebase shim
+            if (typeof window.firebaseApiCall === 'function') {
+                return await window.firebaseApiCall(endpoint, method, body);
+            }
+            // If still not available, throw an explicit error rather than hitting unknown /api
+            throw new Error('Firebase API not ready');
+        }
         try {
             const options = {
                 method,
@@ -311,9 +516,9 @@ document.addEventListener("DOMContentLoaded", function () {
                 </div>
                 <div class="password-section">
                     <label for="quiz-password">Enter Quiz Password:</label>
-                    <input type="password" id="quiz-password" placeholder="Enter password">
+                    <input type="password" id="quiz-password" placeholder="Enter password" aria-describedby="password-error" aria-invalid="false">
                     <button onclick="verifyPasswordAndStart()" id="start-quiz-btn">Start 100-Question Quiz</button>
-                    <div id="password-error" style="color: red; display: none; margin-top: 10px;"></div>
+                    <div id="password-error" style="color: red; display: none; margin-top: 10px;" aria-live="polite"></div>
                 </div>
             </div>
         `;
@@ -345,6 +550,9 @@ document.addEventListener("DOMContentLoaded", function () {
                 updateQuizStartButton();
             }, 1000);
         }, 500);
+
+        // Kick off background prefetch while the user is online on the landing screen
+        prefetchQuizDataIfOnline();
 
         // Make functions global
         window.forceConnectionCheck = function() {
@@ -411,12 +619,8 @@ document.addEventListener("DOMContentLoaded", function () {
             updateFlightModeIndicator();
             updateQuizStartButton();
             
-            // After final check, verify if we're offline
-            if (connectionStatus.online) {
-                alert('❗ Please turn off your internet connection (enable flight mode) before starting the quiz.');
-                console.log('Quiz start blocked: Connection detected');
-                return;
-            }
+            // Note: We no longer block here. If online, students can log in/sign up first.
+            // We'll enforce going offline right before starting the quiz.
 
             const password = document.getElementById('quiz-password').value;
             const errorDiv = document.getElementById('password-error');
@@ -440,25 +644,48 @@ document.addEventListener("DOMContentLoaded", function () {
         const userDiv = document.createElement('div');
         userDiv.classList.add('user-identification');
         userDiv.innerHTML = `
-            <div class="prerequisite-content" style="max-width: 520px;">
-                <h2>User Identification</h2>
-                <p style="margin-top:0;">Enter your User ID and (optionally) basic details, then select your role to begin.</p>
-                <div style="margin:15px 0; display:flex; flex-direction:column; gap:12px;">
+            <div class="prerequisite-content" style="max-width: 560px;">
+                <h2 style="margin-bottom:10px;">Account</h2>
+                <div class="auth-tabs" style="display:flex; gap:8px; justify-content:center; margin-bottom:12px;">
+                  <button id="tab-login" class="btn" style="background:#2196F3;">Login</button>
+                  <button id="tab-signup" class="btn" style="background:#555;">Sign Up</button>
+                </div>
+
+                <div id="login-section" style="display:block; margin-top:10px;">
+                  <label style="display:flex; flex-direction:column; font-weight:600;">
+                    Email
+                    <input type="email" id="login-email" placeholder="name@klh.edu.in" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
+                  </label>
+                  <label style="display:flex; flex-direction:column; font-weight:600;">
+                    Password
+                    <input type="password" id="login-password" placeholder="Enter password" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
+                  </label>
+                  <button id="login-btn" class="btn" style="padding:10px 16px; background:#27ae60; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:15px; width:100%;">Login</button>
+                  <div id="login-error" style="display:none; color:#ff6b6b; font-weight:600; margin-top:8px;" aria-live="polite"></div>
+                </div>
+
+                <div id="signup-section" style="display:none; margin-top:10px;">
+                  <p style="margin-top:0;">Enter your details, then select your role to create an account.</p>
+                  <div style="display:flex; flex-direction:column; gap:12px;">
                     <label style="display:flex; flex-direction:column; font-weight:600;">
-                        User ID (number required):
-                        <input type="number" id="user-id-input" min="1" placeholder="e.g. 42" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
+                        User ID (number required)
+                        <input type="number" id="user-id-input" min="1" placeholder="e.g. 2410030001" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
                     </label>
                     <label style="display:flex; flex-direction:column; font-weight:600;">
-                        Username (optional):
+                        Username (optional)
                         <input type="text" id="user-username-input" maxlength="50" placeholder="e.g. jdoe" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
                     </label>
                     <label style="display:flex; flex-direction:column; font-weight:600;">
-                        Full Name (optional):
+                        Full Name (optional)
                         <input type="text" id="user-fullname-input" maxlength="100" placeholder="e.g. John Doe" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
                     </label>
                     <label style="display:flex; flex-direction:column; font-weight:600;">
-                        Email (required, must end with @klh.edu.in):
+                        Email (must end with @klh.edu.in)
                         <input type="email" id="user-email-input" maxlength="120" placeholder="e.g. name@klh.edu.in" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
+                    </label>
+                    <label style="display:flex; flex-direction:column; font-weight:600;">
+                        Password (min 6 chars)
+                        <input type="password" id="user-password-input" maxlength="120" placeholder="Choose a password" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
                     </label>
                     <fieldset style="border:1px solid #444; border-radius:6px; padding:10px;">
                         <legend style="padding:0 6px; font-weight:600;">Role</legend>
@@ -469,14 +696,17 @@ document.addEventListener("DOMContentLoaded", function () {
                             <input type="radio" name="user-role" value="teacher"> Teacher
                         </label>
                     </fieldset>
-                    <div id="teacher-password-wrapper" style="display:none;">
-                        <label style="display:flex; flex-direction:column; font-weight:600;">
-                            Teacher Password:
-                            <input type="password" id="teacher-role-password" placeholder="Enter teacher password" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
-                        </label>
-                    </div>
-                    <button id="confirm-user-btn" style="padding:10px 16px; background:#27ae60; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:15px;">Begin Quiz</button>
-                    <div id="user-setup-error" style="display:none; color:#ff6b6b; font-weight:600;"></div>
+                    <button id="signup-btn" class="btn" style="padding:10px 16px; background:#27ae60; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:15px;">Create Account</button>
+                    <div id="user-setup-error" style="display:none; color:#ff6b6b; font-weight:600;" aria-live="polite"></div>
+                  </div>
+                </div>
+
+                <div style="margin-top:14px; font-size:12px; color:#ccc; text-align:center;">
+                  Tip: You can log in or sign up while online. Turn OFF internet before starting the quiz.
+                </div>
+                <div style="display:flex; justify-content:center; gap:10px; margin-top:12px;">
+                  <button id="confirm-user-btn" class="btn" style="background:#27ae60;">Begin Quiz</button>
+                  <button id="close-auth" class="btn" style="background:#555;">Close</button>
                 </div>
             </div>
         `;
@@ -489,20 +719,34 @@ document.addEventListener("DOMContentLoaded", function () {
 
         document.body.appendChild(userDiv);
 
-        // Show/hide teacher password input when role changes
-        const roleRadios = userDiv.querySelectorAll('input[name="user-role"]');
-        const teacherPwWrapper = userDiv.querySelector('#teacher-password-wrapper');
-        roleRadios.forEach(r => r.addEventListener('change', () => {
-            const selectedRole = userDiv.querySelector('input[name="user-role"]:checked').value;
-            teacherPwWrapper.style.display = selectedRole === 'teacher' ? 'block' : 'none';
-        }));
+                // Tabs toggle
+                const loginTab = userDiv.querySelector('#tab-login');
+                const signupTab = userDiv.querySelector('#tab-signup');
+                const loginSection = userDiv.querySelector('#login-section');
+                const signupSection = userDiv.querySelector('#signup-section');
+                function switchMode(mode){
+                    if(mode==='login'){
+                        loginSection.style.display='block'; signupSection.style.display='none';
+                        loginTab.style.background='#2196F3'; signupTab.style.background='#555';
+                    }else{
+                        loginSection.style.display='none'; signupSection.style.display='block';
+                        loginTab.style.background='#555'; signupTab.style.background='#2196F3';
+                    }
+                }
+                loginTab.addEventListener('click', ()=>switchMode('login'));
+                signupTab.addEventListener('click', ()=>switchMode('signup'));
+
+                // Close
+                userDiv.querySelector('#close-auth').addEventListener('click', ()=>{ userDiv.remove(); });
+
+                // Role UI has no separate teacher password; authorization is via Firebase Auth + role in Firestore
 
         document.getElementById('confirm-user-btn').addEventListener('click', async () => {
             const userIdInput = document.getElementById('user-id-input');
             const usernameInput = document.getElementById('user-username-input');
             const fullnameInput = document.getElementById('user-fullname-input');
             const emailInput = document.getElementById('user-email-input');
-            const teacherPasswordInput = document.getElementById('teacher-role-password');
+            const passwordInput = document.getElementById('user-password-input');
             const errorBox = document.getElementById('user-setup-error');
             const roleValue = document.querySelector('input[name="user-role"]:checked')?.value || 'student';
 
@@ -531,14 +775,12 @@ document.addEventListener("DOMContentLoaded", function () {
                 return;
             }
 
-            // Teacher password validation
-            if (isTeacher) {
-                const enteredPw = (teacherPasswordInput.value || '').trim();
-                if (enteredPw !== TEACHER_ROLE_PASSWORD) {
-                    errorBox.textContent = 'Invalid teacher password.';
-                    errorBox.style.display = 'block';
-                    return;
-                }
+            // Require password for authentication
+            const pw = (passwordInput.value || '').trim();
+            if (!pw || pw.length < 6) {
+                errorBox.textContent = 'Password required (min 6 chars).';
+                errorBox.style.display = 'block';
+                return;
             }
 
             // Email must be present and end with @klh.edu.in
@@ -562,75 +804,107 @@ document.addEventListener("DOMContentLoaded", function () {
             currentUserFullName = fullnameInput.value.trim() || null;
             currentUserEmail = emailInput.value.trim() || null;
 
-            // Persist / identify user in backend (best-effort, non-blocking on error)
+            // SIGN UP: Authenticate with Firebase; prevent duplicate emails; store profile in Firestore via API shim
             try {
-                // MySQL INT max is 2147483647. Student roll numbers like 2410030001 exceed this and
-                // caused failures when we tried to force that value into the primary key.
-                // Solution: only send an explicit id for smaller (teacher/admin) IDs. For large student
-                // numbers we let the DB auto-generate the id and instead embed the provided number into
-                // the username (if a username was not supplied) and also send it as an externalId field
-                // (ignored by backend if unsupported).
-                const INT_MAX = 2147483647;
-                const payload = {
-                    // Use supplied username or fallback to the entered numeric ID as a string
+                const helpers = window.firebaseAuthHelpers;
+                const auth = window.firebaseAuth;
+                // Creating a new account
+                await helpers.createUserWithEmailAndPassword(currentUserEmail, pw);
+                const savedUser = await apiCall('/users/identify', 'POST', {
                     username: currentUsername || String(currentUserId),
                     email: currentUserEmail,
                     fullName: currentUserFullName,
                     role: currentUserRole,
-                    externalId: currentUserId // optional; backend may ignore
-                };
-                if (currentUserId <= INT_MAX) {
-                    // Safe to pass as actual id (e.g., teacher IDs like 20001)
-                    payload.id = currentUserId;
-                }
-                const savedUser = await apiCall('/users/identify', 'POST', payload);
-                if (savedUser && savedUser.id) {
-                    currentUserId = savedUser.id; // ensure backend-generated id used
-                }
+                    externalId: currentUserId
+                });
+                currentUserId = savedUser && savedUser.id ? savedUser.id : (auth && auth.currentUser ? auth.currentUser.uid : null);
                 console.log('User record persisted/identified:', savedUser);
             } catch (persistErr) {
-                console.warn('User identify call failed, proceeding anyway:', persistErr.message);
+                const msg = String(persistErr && persistErr.message || persistErr);
+                if (/auth\/email-already-in-use/.test(msg)){
+                  errorBox.textContent = 'This email is already registered. Please login instead.';
+                } else if (/auth\//.test(msg)){
+                  errorBox.textContent = 'Authentication failed: ' + msg.replace('Firebase: ','');
+                } else {
+                  errorBox.textContent = 'Failed to create account: ' + msg;
+                }
+                errorBox.style.display = 'block';
+                // Queue user payload for sync when back online
+                try {
+                    offlineUserPayload = {
+                        username: currentUsername || String(currentUserId),
+                        email: currentUserEmail,
+                        fullName: currentUserFullName,
+                        role: currentUserRole,
+                        externalId: currentUserId,
+                        id: currentUserId
+                    };
+                    persistOfflineUserPayload();
+                } catch(_){}
+                return; // stop on error
             }
 
             console.log('User identification confirmed:', { currentUserId, currentUserRole, currentUsername, currentUserFullName, currentUserEmail });
 
             // If teacher, redirect to dashboard instead of loading quiz
             if (currentUserRole === 'teacher') {
-                try {
-                    sessionStorage.setItem('teacherCtx', JSON.stringify({
-                        userId: currentUserId,
-                        role: currentUserRole,
-                        username: currentUsername,
-                        email: currentUserEmail,
-                        fullName: currentUserFullName
-                    }));
-                } catch(_) {}
                 userDiv.remove();
                 window.location.href = 'teacher.html';
                 return;
             }
 
             userDiv.remove();
-            await loadQuizData();
+                        // Enforce offline before starting quiz
+                        if (navigator.onLine) {
+                                alert('Please turn OFF internet to begin the quiz. You are logged in—come back after enabling flight mode.');
+                                return;
+                        }
+                        await loadQuizData();
         });
+
+                // LOGIN handler
+                userDiv.querySelector('#login-btn').addEventListener('click', async ()=>{
+                    const email = userDiv.querySelector('#login-email').value.trim();
+                    const pw = userDiv.querySelector('#login-password').value.trim();
+                    const err = userDiv.querySelector('#login-error');
+                    err.style.display = 'none';
+                    if (!email || !pw) { err.textContent='Email and password required.'; err.style.display='block'; return; }
+                    try{
+                        const helpers = window.firebaseAuthHelpers;
+                        await helpers.signInWithEmailAndPassword(email, pw);
+                        // Read role from Firestore
+                        const { getDoc, doc } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+                        const uid = window.firebaseAuth.currentUser.uid;
+                        const snap = await getDoc(doc(window.firebaseDb, 'users', uid));
+                        currentUserRole = snap.exists() ? (snap.data().role || 'student') : 'student';
+                        currentUserId = uid;
+                        // Ensure profile exists
+                        await apiCall('/users/identify','POST',{ email, role: currentUserRole });
+                        if (currentUserRole === 'teacher') {
+                            userDiv.remove();
+                            window.location.href = 'teacher.html';
+                            return;
+                        }
+                        alert('Login successful. Turn OFF internet to start the quiz.');
+                    } catch(e){
+                        const msg = String(e && e.message || e);
+                        if (/auth\/user-not-found/.test(msg)) err.textContent = 'No account found. Please Sign Up.';
+                        else if (/auth\/wrong-password/.test(msg)) err.textContent = 'Incorrect password.';
+                        else err.textContent = 'Login failed: ' + msg.replace('Firebase: ','');
+                        err.style.display='block';
+                    }
+                });
     }
     // Load quiz data from backend
     async function loadQuizData() {
         try {
-            // Start quiz attempt (Java backend expects userId as query param)
-            // Use a safe student fallback (ID 3 exists in seed data as student) instead of 1
-            const effectiveUserId = (currentUserId != null ? currentUserId : 3);
+            // Start quiz attempt (Auth uid used server-side)
             let startResponse;
             try {
-                startResponse = await apiCall(`/quiz/1/start?userId=${encodeURIComponent(effectiveUserId)}`, 'POST');
+                startResponse = await apiCall(`/quiz/1/start`, 'POST');
             } catch (e) {
                 console.error('Start attempt failed:', e);
-                // If teacher-role ID was used accidentally and forbidden (403), try an anonymous student id = 3
-                if (e.message && /403|forbidden/i.test(String(e.message))) {
-                    startResponse = await apiCall(`/quiz/1/start?userId=3`, 'POST');
-                } else {
-                    throw e; // rethrow other errors
-                }
+                throw e; // rethrow
             }
             attemptId = startResponse.id || startResponse.attempt_id || startResponse.attemptId;
 
@@ -660,7 +934,13 @@ document.addEventListener("DOMContentLoaded", function () {
                 const subjectId = q.subjectId || q.subject_id;
                 const subject = subjectById.get(subjectId) || { id: subjectId, name: q.subjectName || 'Subject', color: q.subjectColor || subjectColors[subjectId] || '#999' };
                 const optionsRaw = allOptions[idx] || [];
-                const options = optionsRaw.map(o => ({
+                // Shuffle options per question while preserving ids and correctness mapping
+                const shuffledOptionsRaw = [...optionsRaw];
+                for (let i = shuffledOptionsRaw.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [shuffledOptionsRaw[i], shuffledOptionsRaw[j]] = [shuffledOptionsRaw[j], shuffledOptionsRaw[i]];
+                }
+                const options = shuffledOptionsRaw.map(o => ({
                     id: o.id,
                     option_text: o.optionText || o.option_text,
                     is_correct: (o.isCorrect !== undefined ? o.isCorrect : o.is_correct)
@@ -668,13 +948,23 @@ document.addEventListener("DOMContentLoaded", function () {
                 return {
                     id: q.id,
                     subject_id: subjectId,
+                    // order_num will be reassigned after shuffling questions
                     order_num: q.orderNum || q.order_num || (idx + 1),
                     question_text: q.questionText || q.question_text,
                     options
                 };
             });
 
-            const uniqueSubjectIds = [...new Set(adaptedQuestions.map(q => q.subject_id))];
+            // Shuffle entire question set for full randomization
+            const randomizedQuestions = [...adaptedQuestions];
+            for (let i = randomizedQuestions.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [randomizedQuestions[i], randomizedQuestions[j]] = [randomizedQuestions[j], randomizedQuestions[i]];
+            }
+            // Re-number questions according to new order
+            randomizedQuestions.forEach((q, idx) => { q.order_num = idx + 1; });
+
+            const uniqueSubjectIds = [...new Set(randomizedQuestions.map(q => q.subject_id))];
             const adaptedSubjects = uniqueSubjectIds.map(id => {
                 const s = subjectById.get(id);
                 return {
@@ -685,9 +975,9 @@ document.addEventListener("DOMContentLoaded", function () {
             });
 
             quizData = {
-                questions: adaptedQuestions,
+                questions: randomizedQuestions,
                 subjects: adaptedSubjects,
-                total_questions: adaptedQuestions.length
+                total_questions: randomizedQuestions.length
             };
 
             console.log(`Loaded ${quizData.total_questions} questions from database`);
@@ -779,17 +1069,19 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!container) return;
         container.innerHTML = '';
 
-        // Determine subjects & ranges from quizData (fallback to fixed chunk of 25)
-        // Build map subjectId -> questions (sorted by order_num)
+        // Build map subjectId -> questions preserving the randomized global order
         const bySubject = new Map();
-        quizData.questions.forEach(q => {
-            if (!bySubject.has(q.subject_id)) bySubject.set(q.subject_id, []);
+        const firstIndex = new Map();
+        quizData.questions.forEach((q, idx) => {
+            if (!bySubject.has(q.subject_id)) {
+                bySubject.set(q.subject_id, []);
+                firstIndex.set(q.subject_id, idx);
+            }
             bySubject.get(q.subject_id).push(q);
         });
-        bySubject.forEach(arr => arr.sort((a,b)=>a.order_num-b.order_num));
 
-        // Sort subject order by first question order_num
-        const subjectEntries = [...bySubject.entries()].sort((a,b)=>a[1][0].order_num - b[1][0].order_num);
+        // Order subjects by first appearance in the randomized sequence
+        const subjectEntries = [...bySubject.entries()].sort((a,b)=>firstIndex.get(a[0]) - firstIndex.get(b[0]));
 
         subjectEntries.forEach(([subjectId, questions]) => {
             const subjectMeta = quizData.subjects.find(s=>s.id===subjectId) || { name: `Subject ${subjectId}` };
@@ -962,7 +1254,8 @@ document.addEventListener("DOMContentLoaded", function () {
             }
         });
 
-        // Answer selection
+        // Answer selection with debounce per question
+        const pendingSaves = new Map();
         document.addEventListener('change', async (e) => {
             if (e.target.type === 'radio' && quizStarted) {
                 const questionId = e.target.dataset.questionId;
@@ -980,15 +1273,24 @@ document.addEventListener("DOMContentLoaded", function () {
                 labels.forEach(label => label.classList.remove('selected'));
                 e.target.closest('label').classList.add('selected');
 
-                // Send to backend
-                try {
-                    await apiCall(`/quiz/attempts/${attemptId}/answer`, 'POST', {
-                        questionId: parseInt(questionId),
-                        selectedOptionId: parseInt(selectedOptionId)
-                    });
-                } catch (error) {
-                    console.error('Failed to save answer:', error);
-                }
+                // Debounced save
+                const key = String(questionId);
+                if (pendingSaves.has(key)) clearTimeout(pendingSaves.get(key));
+                const t = setTimeout(async () => {
+                    try {
+                        await apiCall(`/quiz/attempts/${attemptId}/answer`, 'POST', {
+                            questionId: parseInt(questionId),
+                            selectedOptionId: parseInt(selectedOptionId)
+                        });
+                        if (!navigator.onLine) { // persist local buffer while offline
+                            offlineAttempt.answers[String(parseInt(questionId))] = parseInt(selectedOptionId);
+                            persistOfflineAttempt();
+                        }
+                    } catch (error) {
+                        console.error('Failed to save answer:', error);
+                    }
+                }, 350);
+                pendingSaves.set(key, t);
 
                 updateNavigationButtonStyles();
             }
@@ -1123,6 +1425,14 @@ document.addEventListener("DOMContentLoaded", function () {
             const warningOverlay = document.getElementById('auto-submit-warning');
             if (warningOverlay) warningOverlay.remove();
             const result = await apiCall(`/quiz/attempts/${attemptId}/complete`, 'POST');
+            if (!navigator.onLine) {
+                offlineAttempt.completed = true;
+                offlineAttempt.result = result;
+                persistOfflineAttempt();
+            } else {
+                // If back online, try to flush any pending offline data
+                flushOfflineToFirestore();
+            }
 
             // Adapt result shape for UI
             const adapted = {

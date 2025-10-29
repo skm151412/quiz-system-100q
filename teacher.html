@@ -13,6 +13,7 @@
       <button data-tab="attempts" class="active">Attempts</button>
       <button data-tab="addq">Add Question</button>
       <button data-tab="deleteq">Delete Question</button>
+      <button data-tab="users">Users</button>
       <button id="logoutBtn" title="Return to landing">Logout</button>
     </nav>
   </header>
@@ -106,9 +107,34 @@
         <strong>Enter the Question Number</strong> shown to students (e.g., if you want to delete Question 101, enter "101").
       </p>
     </section>
+    <section id="tab-users">
+      <h2>Users</h2>
+      <div class="table-wrapper">
+        <div class="table-scroller">
+          <table id="usersTable">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Username</th>
+                <th>Full Name</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Attempts</th>
+                <th>Best %</th>
+                <th>Last %</th>
+                <th>Last Attempt</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </main>
-  <!-- Backend origin (set to your public backend URL in backend-origin.js) -->
-  <script src="backend-origin.js"></script>
-  <script src="teacher.js"></script>
+  <!-- Initialize Firebase and enable Firebase-only mode -->
+  <script type="module" src="firebase-init.js?v=20251029-3"></script>
+  <script src="backend-origin.js?v=20251029-2"></script>
+  <script type="module" src="firebase-api.js?v=20251029-3"></script>
+  <script src="teacher.js?v=20251029-4"></script>
 </body>
 </html>
