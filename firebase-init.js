@@ -14,7 +14,9 @@ import {
   signOut,
   sendPasswordResetEmail,
   GoogleAuthProvider,
-  signInWithPopup
+  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 
 // Your web app's Firebase configuration (public client config)
@@ -49,5 +51,14 @@ window.firebaseAuthHelpers = {
     provider.setCustomParameters({ prompt: 'select_account' });
     const res = await signInWithPopup(auth, provider);
     return res.user;
+  },
+  signInWithGoogleRedirect: async () => {
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    await signInWithRedirect(auth, provider);
+  },
+  getGoogleRedirectResult: async () => {
+    const res = await getRedirectResult(auth);
+    return res?.user || null;
   }
 };

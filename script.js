@@ -715,6 +715,21 @@ document.addEventListener("DOMContentLoaded", function () {
         const googleBtn = modal.querySelector('#google-btn');
         const forgotLink = modal.querySelector('#forgotLink');
 
+        // Simplify to Google-only option: hide tabs, email/password, and primary button
+        try {
+            if (tabSignup) tabSignup.style.display = 'none';
+            if (tabLogin) tabLogin.style.display = 'none';
+            if (nameWrap) nameWrap.style.display = 'none';
+            if (emailEl && emailEl.parentElement) emailEl.parentElement.style.display = 'none';
+            if (pwEl && pwEl.parentElement) pwEl.parentElement.style.display = 'none';
+            if (forgotLink) forgotLink.style.display = 'none';
+            if (primaryBtn) primaryBtn.style.display = 'none';
+            authTitle.textContent = 'Continue with your account';
+            // Hide the visual OR divider if present
+            const orDivider = Array.from(modal.querySelectorAll('div')).find(d => d.textContent && d.textContent.trim() === 'OR');
+            if (orDivider && orDivider.parentElement) orDivider.parentElement.style.display = 'none';
+        } catch(_) {}
+
         let role = 'student';
         let mode = 'login'; // 'login' | 'signup'
 
@@ -768,7 +783,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
         async function identifyAndProceed(user, extraName) {
             try {
-                currentUserEmail = user?.email || emailEl.value.trim();
+                currentUserEmail = user?.email || (emailEl ? emailEl.value.trim() : null);
                 currentUserFullName = extraName || user?.displayName || null;
                 currentUsername = (currentUserEmail ? currentUserEmail.split('@')[0] : null);
                 currentUserRole = role;
@@ -789,10 +804,15 @@ document.addEventListener("DOMContentLoaded", function () {
                 };
                 persistOfflineUserPayload();
             }
+            // Confirm effective role from server if available
+            let effectiveRole = role;
+            try {
+                const me = await apiCall('/users/me', 'GET');
+                if (me && me.role) effectiveRole = me.role;
+            } catch(_) {}
 
-            // Teacher -> dashboard; Student -> prerequisites
             modal.remove();
-            if (role === 'teacher') {
+            if (effectiveRole === 'teacher') {
                 window.location.href = 'teacher.html';
             } else {
                 showPrerequisites();
@@ -833,7 +853,17 @@ document.addEventListener("DOMContentLoaded", function () {
             errorBox.style.display = 'none';
             try {
                 const helpers = window.firebaseAuthHelpers;
-                const user = await helpers.signInWithGoogle();
+                let user = null;
+                try {
+                    user = await helpers.signInWithGoogle();
+                } catch (e) {
+                    const code = (e && e.code) || '';
+                    if (String(code).includes('popup') || String((e && e.message) || '').toLowerCase().includes('popup')) {
+                        await helpers.signInWithGoogleRedirect();
+                        return; // redirect flow will reload the page
+                    }
+                    throw e;
+                }
                 await identifyAndProceed(user);
             } catch (e) {
                 // No visible error message
@@ -860,6 +890,15 @@ document.addEventListener("DOMContentLoaded", function () {
 
         // Initial state
         updateUiForState();
+        // Handle redirect result (if popups were blocked)
+        (async () => {
+            try {
+                const user = await (window.firebaseAuthHelpers && window.firebaseAuthHelpers.getGoogleRedirectResult ? window.firebaseAuthHelpers.getGoogleRedirectResult() : null);
+                if (user) {
+                    await identifyAndProceed(user);
+                }
+            } catch(_) {}
+        })();
     }
     // Load quiz data from backend
     async function loadQuizData() {
