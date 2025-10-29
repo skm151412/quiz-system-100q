@@ -643,175 +643,230 @@ document.addEventListener("DOMContentLoaded", function () {
         };
     }
 
-    // New: user identification page (shown after password & offline checks pass)
+    // New: authentication modal with role selection and tabs
     function showUserIdentificationPage() {
-        const userDiv = document.createElement('div');
-        userDiv.classList.add('user-identification');
-        userDiv.innerHTML = `
-            <div class="prerequisite-content" style="max-width: 520px;">
-                <h2>User Identification</h2>
-                <p style="margin-top:0;">Enter your User ID and (optionally) basic details, then select your role to begin.</p>
-                <div style="margin:15px 0; display:flex; flex-direction:column; gap:12px;">
-                    <label style="display:flex; flex-direction:column; font-weight:600;">
-                        User ID (number required):
-                        <input type="number" id="user-id-input" min="1" placeholder="e.g. 42" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
-                    </label>
-                    <label style="display:flex; flex-direction:column; font-weight:600;">
-                        Username (optional):
-                        <input type="text" id="user-username-input" maxlength="50" placeholder="e.g. jdoe" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
-                    </label>
-                    <label style="display:flex; flex-direction:column; font-weight:600;">
-                        Full Name (optional):
-                        <input type="text" id="user-fullname-input" maxlength="100" placeholder="e.g. John Doe" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
-                    </label>
-                    <label style="display:flex; flex-direction:column; font-weight:600;">
-                        Email (required, must end with @klh.edu.in):
-                        <input type="email" id="user-email-input" maxlength="120" placeholder="e.g. name@klh.edu.in" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
-                    </label>
-                    <label style="display:flex; flex-direction:column; font-weight:600;">
-                        Password (required for sign-in):
-                        <input type="password" id="user-password-input" maxlength="120" placeholder="Choose or enter your password" style="padding:8px; border-radius:6px; border:1px solid #555; background:#222; color:#fff;">
-                    </label>
-                    <fieldset style="border:1px solid #444; border-radius:6px; padding:10px;">
-                        <legend style="padding:0 6px; font-weight:600;">Role</legend>
-                        <label style="margin-right:15px;">
-                            <input type="radio" name="user-role" value="student" checked> Student
-                        </label>
-                        <label>
-                            <input type="radio" name="user-role" value="teacher"> Teacher
-                        </label>
-                    </fieldset>
-                    
-                    <button id="confirm-user-btn" style="padding:10px 16px; background:#27ae60; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:15px;">Begin Quiz</button>
-                    <div id="user-setup-error" style="display:none; color:#ff6b6b; font-weight:600;" aria-live="polite"></div>
-                </div>
+        const modal = document.createElement('div');
+        modal.id = 'auth-modal';
+        modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:2000;padding:20px;overflow:auto;';
+
+        modal.innerHTML = `
+          <div style="width: 100%; max-width: 520px; background: #ffffff; color:#1a1a1a; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.35); overflow: hidden; font-family: system-ui, Segoe UI, Arial, sans-serif;">
+            <div style="padding: 16px; border-bottom: 1px solid #eef1f4; display:flex; justify-content:center;">
+              <div id="roleSwitch" style="display:inline-flex; background:#f1f5f9; padding:4px; border-radius:999px;">
+                <button data-role="student" class="role-btn active" style="padding:8px 14px;border-radius:999px;border:none;background:#2563eb;color:#fff;font-weight:600;cursor:pointer;">Student</button>
+                <button data-role="teacher" class="role-btn" style="padding:8px 14px;border-radius:999px;border:none;background:transparent;color:#1f2937;font-weight:600;cursor:pointer;">Teacher</button>
+              </div>
             </div>
+            <div style="padding: 16px 18px 0; display:flex; gap:8px; justify-content:center;">
+              <button id="tab-signup" class="tab-btn" aria-selected="false" style="flex:0 0 auto;padding:10px 18px;border-radius:999px;border:1px solid #d1d5db;background:#fff;color:#111;cursor:pointer;">Sign up</button>
+              <button id="tab-login" class="tab-btn active" aria-selected="true" style="flex:0 0 auto;padding:10px 18px;border-radius:999px;border:1px solid #2563eb;background:#2563eb;color:#fff;font-weight:600;cursor:pointer;">Login</button>
+            </div>
+            <div style="padding: 18px 24px 24px;">
+              <h2 id="auth-title" style="margin: 0 0 12px; font-size: 22px;">Log in to your existing profile</h2>
+
+              <button id="google-btn" style="width:100%;display:flex;align-items:center;justify-content:center;gap:10px;border:1px solid #d1d5db;background:#f3f4f6;padding:12px 14px;border-radius:10px;cursor:pointer;font-weight:600;color:#374151;">
+                <span style="font-size:18px;">🟦</span> Continue with Google
+              </button>
+
+              <div style="display:flex;align-items:center;gap:16px;margin:14px 0 10px;color:#9aa3af;">
+                <div style="flex:1;height:1px;background:#e5e7eb;"></div>
+                <span>OR</span>
+                <div style="flex:1;height:1px;background:#e5e7eb;"></div>
+              </div>
+
+              <div id="name-wrap" style="margin-bottom:10px; display:none;">
+                <label style="display:block;font-weight:600;margin-bottom:6px;">Full Name (optional)</label>
+                <input id="full-name" type="text" maxlength="100" placeholder="e.g. John Doe" style="width:100%;padding:12px;border-radius:10px;border:1px solid #d1d5db;outline:none;">
+              </div>
+
+              <div style="margin-bottom:10px;">
+                <label style="display:block;font-weight:600;margin-bottom:6px;">Email (must end with @klh.edu.in)</label>
+                <input id="email" type="email" placeholder="name@klh.edu.in" style="width:100%;padding:12px;border-radius:10px;border:1px solid #d1d5db;outline:none;">
+              </div>
+
+              <div style="margin-bottom:4px; position:relative;">
+                <label style="display:block;font-weight:600;margin-bottom:6px;">Password</label>
+                <input id="password" type="password" placeholder="Enter password" style="width:100%;padding:12px 44px 12px 12px;border-radius:10px;border:1px solid #d1d5db;outline:none;">
+                <button id="togglePw" type="button" aria-label="Show password" style="position:absolute;right:8px;top:34px;border:none;background:transparent;cursor:pointer;font-size:16px;">👁️</button>
+              </div>
+
+              <div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0 12px;">
+                <a id="forgotLink" href="#" style="text-decoration:none;color:#2563eb;font-weight:600;">Forgot Password?</a>
+                <div id="form-error" style="color:#b91c1c;font-weight:600;display:none;" aria-live="polite"></div>
+              </div>
+
+              <button id="primaryAuthBtn" style="width:100%;padding:12px 16px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-size:16px;font-weight:700;cursor:pointer;">LOGIN</button>
+            </div>
+          </div>
         `;
-        userDiv.style.cssText = `
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.9);
-            display:flex; justify-content:center; align-items:center;
-            z-index:1000; overflow-y:auto; padding:20px; box-sizing:border-box;`;
 
-        document.body.appendChild(userDiv);
+        document.body.appendChild(modal);
 
-        // Role UI has no separate teacher password; authorization is via Firebase Auth + role in Firestore
+        const roleButtons = modal.querySelectorAll('.role-btn');
+        const tabSignup = modal.querySelector('#tab-signup');
+        const tabLogin = modal.querySelector('#tab-login');
+        const authTitle = modal.querySelector('#auth-title');
+        const nameWrap = modal.querySelector('#name-wrap');
+        const emailEl = modal.querySelector('#email');
+        const pwEl = modal.querySelector('#password');
+        const togglePwBtn = modal.querySelector('#togglePw');
+        const primaryBtn = modal.querySelector('#primaryAuthBtn');
+        const errorBox = modal.querySelector('#form-error');
+        const googleBtn = modal.querySelector('#google-btn');
+        const forgotLink = modal.querySelector('#forgotLink');
 
-        document.getElementById('confirm-user-btn').addEventListener('click', async () => {
-            const userIdInput = document.getElementById('user-id-input');
-            const usernameInput = document.getElementById('user-username-input');
-            const fullnameInput = document.getElementById('user-fullname-input');
-            const emailInput = document.getElementById('user-email-input');
-            const passwordInput = document.getElementById('user-password-input');
-            const errorBox = document.getElementById('user-setup-error');
-            const roleValue = document.querySelector('input[name="user-role"]:checked')?.value || 'student';
+        let role = 'student';
+        let mode = 'login'; // 'login' | 'signup'
 
-            const parsedId = parseInt(userIdInput.value, 10);
-            if (isNaN(parsedId)) {
-                errorBox.textContent = 'Invalid ID: must be a number.';
-                errorBox.style.display = 'block';
-                return;
+        const updateUiForState = () => {
+            // Role -> affect tabs availability
+            const teacher = role === 'teacher';
+            if (teacher) {
+                // Disable signup for teachers
+                tabSignup.setAttribute('disabled', 'true');
+                tabSignup.style.opacity = '0.5';
+                if (mode === 'signup') mode = 'login';
+                tabLogin.classList.add('active');
+                tabSignup.classList.remove('active');
+                authTitle.textContent = 'Log in to your teacher account';
+                primaryBtn.textContent = 'LOGIN';
+                nameWrap.style.display = 'none';
+            } else {
+                tabSignup.removeAttribute('disabled');
+                tabSignup.style.opacity = '1';
+                authTitle.textContent = (mode === 'login') ? 'Log in to your existing profile' : 'Create your student profile';
+                primaryBtn.textContent = (mode === 'login') ? 'LOGIN' : 'SIGN UP';
+                nameWrap.style.display = (mode === 'signup') ? 'block' : 'none';
             }
+        };
 
-            // Role-specific ID range constraints
-            const isStudent = roleValue === 'student';
-            const isTeacher = roleValue === 'teacher';
+        roleButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                roleButtons.forEach(b => { b.classList.remove('active'); b.style.background = 'transparent'; b.style.color = '#1f2937'; });
+                btn.classList.add('active');
+                btn.style.background = '#2563eb';
+                btn.style.color = '#fff';
+                role = btn.dataset.role;
+                updateUiForState();
+            });
+        });
 
-            let idValid = true;
-            if (isStudent) {
-                // Student IDs: 2410030001 - 2410030600
-                idValid = parsedId >= 2410030001 && parsedId <= 2410030600;
-            } else if (isTeacher) {
-                // Teacher IDs: 20001 - 20100
-                idValid = parsedId >= 20001 && parsedId <= 20100;
-            }
-            if (!idValid) {
-                errorBox.textContent = 'Invalid ID for selected role.';
-                errorBox.style.display = 'block';
-                return;
-            }
+        tabLogin.addEventListener('click', () => { mode = 'login'; tabLogin.classList.add('active'); tabLogin.style.background='#2563eb'; tabLogin.style.color='#fff'; tabSignup.classList.remove('active'); tabSignup.style.background='#fff'; tabSignup.style.color='#111'; updateUiForState(); });
+        tabSignup.addEventListener('click', () => { if (role==='teacher') return; mode = 'signup'; tabSignup.classList.add('active'); tabSignup.style.background='#2563eb'; tabSignup.style.color='#fff'; tabLogin.classList.remove('active'); tabLogin.style.background='#fff'; tabLogin.style.color='#111'; updateUiForState(); });
 
-            // Require password for authentication
-            const pw = (passwordInput.value || '').trim();
-            if (!pw || pw.length < 6) {
-                errorBox.textContent = 'Password required (min 6 chars).';
-                errorBox.style.display = 'block';
-                return;
-            }
+        togglePwBtn.addEventListener('click', () => {
+            const t = pwEl.getAttribute('type') === 'password' ? 'text' : 'password';
+            pwEl.setAttribute('type', t);
+        });
 
-            // Email must be present and end with @klh.edu.in
-            const emailVal = (emailInput.value || '').trim();
-            if (!emailVal || !emailVal.toLowerCase().endsWith('@klh.edu.in')) {
-                errorBox.textContent = 'Invalid ID: email must end with @klh.edu.in';
-                errorBox.style.display = 'block';
-                return;
-            }
-            // Basic email pattern check (lightweight)
-            if (!/^([^\s@]+)@klh\.edu\.in$/i.test(emailVal)) {
-                errorBox.textContent = 'Invalid email format.';
-                errorBox.style.display = 'block';
-                return;
-            }
+        function validateEmailDomain(email) {
+            return /^([^\s@]+)@klh\.edu\.in$/i.test(String(email||'').trim());
+        }
 
-            // Store the raw entered number temporarily; may be too large for backend INT primary key
-            currentUserId = parsedId;
-            currentUserRole = roleValue;
-            currentUsername = usernameInput.value.trim() || null;
-            currentUserFullName = fullnameInput.value.trim() || null;
-            currentUserEmail = emailInput.value.trim() || null;
-
-            // Authenticate with Firebase; students can self-register, teachers must pre-exist
+        async function identifyAndProceed(user, extraName) {
             try {
-                const helpers = window.firebaseAuthHelpers;
-                const auth = window.firebaseAuth;
-                try {
-                    await helpers.signInWithEmailAndPassword(currentUserEmail, pw);
-                } catch (e) {
-                    if (isStudent && /auth\/user-not-found/.test(e.message)) {
-                        await helpers.createUserWithEmailAndPassword(currentUserEmail, pw);
-                    } else {
-                        throw e;
-                    }
-                }
-                const savedUser = await apiCall('/users/identify', 'POST', {
-                    username: currentUsername || String(currentUserId),
+                currentUserEmail = user?.email || emailEl.value.trim();
+                currentUserFullName = extraName || user?.displayName || null;
+                currentUsername = (currentUserEmail ? currentUserEmail.split('@')[0] : null);
+                currentUserRole = role;
+                const saved = await apiCall('/users/identify', 'POST', {
+                    username: currentUsername,
                     email: currentUserEmail,
                     fullName: currentUserFullName,
-                    role: currentUserRole,
-                    externalId: currentUserId
+                    role: currentUserRole
                 });
-                currentUserId = savedUser && savedUser.id ? savedUser.id : (auth && auth.currentUser ? auth.currentUser.uid : null);
-                console.log('User record persisted/identified:', savedUser);
-            } catch (persistErr) {
-                console.warn('User identify call failed, proceeding anyway:', persistErr.message);
-                // Queue user payload for sync when back online
-                try {
-                    offlineUserPayload = {
-                        username: currentUsername || String(currentUserId),
-                        email: currentUserEmail,
-                        fullName: currentUserFullName,
-                        role: currentUserRole,
-                        externalId: currentUserId,
-                        id: currentUserId
-                    };
-                    persistOfflineUserPayload();
-                } catch(_){}
+                currentUserId = saved?.id || (window.firebaseAuth?.currentUser?.uid) || null;
+            } catch (e) {
+                // queue offline payload
+                offlineUserPayload = {
+                    username: currentUsername,
+                    email: currentUserEmail,
+                    fullName: currentUserFullName,
+                    role: currentUserRole
+                };
+                persistOfflineUserPayload();
             }
 
-            console.log('User identification confirmed:', { currentUserId, currentUserRole, currentUsername, currentUserFullName, currentUserEmail });
-
-            // If teacher, redirect to dashboard instead of loading quiz
-            if (currentUserRole === 'teacher') {
-                userDiv.remove();
+            // Teacher -> dashboard; Student -> prerequisites
+            modal.remove();
+            if (role === 'teacher') {
                 window.location.href = 'teacher.html';
+            } else {
+                showPrerequisites();
+            }
+        }
+
+        primaryBtn.addEventListener('click', async () => {
+            errorBox.style.display = 'none';
+            const email = emailEl.value.trim();
+            const pw = pwEl.value.trim();
+            if (!validateEmailDomain(email)) {
+                errorBox.textContent = 'Email must end with @klh.edu.in';
+                errorBox.style.display = 'block';
                 return;
             }
-
-            userDiv.remove();
-            // After successful login/identification, show prerequisites next
-            showPrerequisites();
+            if (pw.length < 6) {
+                errorBox.textContent = 'Password must be at least 6 characters';
+                errorBox.style.display = 'block';
+                return;
+            }
+            try {
+                const helpers = window.firebaseAuthHelpers;
+                let userCred;
+                if (mode === 'login') {
+                    userCred = await helpers.signInWithEmailAndPassword(email, pw);
+                } else {
+                    // signup only for students
+                    if (role === 'teacher') throw new Error('Teachers cannot sign up here');
+                    userCred = await helpers.createUserWithEmailAndPassword(email, pw);
+                }
+                await identifyAndProceed(userCred.user, (mode==='signup') ? (document.getElementById('full-name').value||undefined) : undefined);
+            } catch (e) {
+                errorBox.textContent = e && e.message ? e.message.replace('Firebase:','').trim() : 'Authentication failed';
+                errorBox.style.display = 'block';
+            }
         });
+
+        googleBtn.addEventListener('click', async () => {
+            errorBox.style.display = 'none';
+            try {
+                const helpers = window.firebaseAuthHelpers;
+                const user = await helpers.signInWithGoogle();
+                if (!validateEmailDomain(user.email)) {
+                    await helpers.signOut();
+                    throw new Error('Only KLH emails are allowed');
+                }
+                await identifyAndProceed(user);
+            } catch (e) {
+                errorBox.textContent = e && e.message ? e.message : 'Google sign-in failed';
+                errorBox.style.display = 'block';
+            }
+        });
+
+        forgotLink.addEventListener('click', async (ev) => {
+            ev.preventDefault();
+            errorBox.style.display = 'none';
+            const email = emailEl.value.trim();
+            if (!validateEmailDomain(email)) {
+                errorBox.textContent = 'Enter your KLH email to receive reset link';
+                errorBox.style.display = 'block';
+                return;
+            }
+            try {
+                await window.firebaseAuthHelpers.sendPasswordResetEmail(email);
+                errorBox.style.color = '#065f46';
+                errorBox.textContent = 'Password reset email sent.';
+                errorBox.style.display = 'block';
+                errorBox.style.color = '#065f46';
+            } catch (e) {
+                errorBox.textContent = e && e.message ? e.message : 'Failed to send reset email';
+                errorBox.style.display = 'block';
+                errorBox.style.color = '#b91c1c';
+            }
+        });
+
+        // Initial state
+        updateUiForState();
     }
     // Load quiz data from backend
     async function loadQuizData() {

@@ -11,7 +11,10 @@ import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  signOut
+  signOut,
+  sendPasswordResetEmail,
+  GoogleAuthProvider,
+  signInWithPopup
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 
 // Your web app's Firebase configuration (public client config)
@@ -39,5 +42,12 @@ window.firebaseAuthHelpers = {
   onAuthStateChanged: (cb) => onAuthStateChanged(auth, cb),
   signInWithEmailAndPassword: (email, password) => signInWithEmailAndPassword(auth, email, password),
   createUserWithEmailAndPassword: (email, password) => createUserWithEmailAndPassword(auth, email, password),
-  signOut: () => signOut(auth)
+  signOut: () => signOut(auth),
+  sendPasswordResetEmail: (email) => sendPasswordResetEmail(auth, email),
+  signInWithGoogle: async () => {
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    const res = await signInWithPopup(auth, provider);
+    return res.user;
+  }
 };
