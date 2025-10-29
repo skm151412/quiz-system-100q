@@ -735,7 +735,8 @@ document.addEventListener("DOMContentLoaded", function () {
                 tabSignup.removeAttribute('disabled');
                 tabSignup.style.opacity = '1';
                 authTitle.textContent = (mode === 'login') ? 'Log in to your existing profile' : 'Create your student profile';
-                primaryBtn.textContent = (mode === 'login') ? 'LOGIN' : 'SIGN UP';
+                // Student flow: always allow continue regardless of sign-up state
+                primaryBtn.textContent = 'CONTINUE';
                 nameWrap.style.display = (mode === 'signup') ? 'block' : 'none';
             }
         };
@@ -799,45 +800,44 @@ document.addEventListener("DOMContentLoaded", function () {
         }
 
         primaryBtn.addEventListener('click', async () => {
+            // Suppress visible error messages per request
             errorBox.style.display = 'none';
             const email = emailEl.value.trim();
             const pw = pwEl.value.trim();
-            if (!isValidEmail(email)) {
-                errorBox.textContent = 'Please enter a valid email address';
-                errorBox.style.display = 'block';
+            if (!isValidEmail(email) || pw.length < 6) {
+                // Do nothing visually; keep user on modal
                 return;
             }
-            if (pw.length < 6) {
-                errorBox.textContent = 'Password must be at least 6 characters';
-                errorBox.style.display = 'block';
-                return;
-            }
+            const helpers = window.firebaseAuthHelpers;
+            let userCred = null;
             try {
-                const helpers = window.firebaseAuthHelpers;
-                let userCred;
-                if (mode === 'login') {
-                    userCred = await helpers.signInWithEmailAndPassword(email, pw);
-                } else {
-                    // signup only for students
-                    if (role === 'teacher') throw new Error('Teachers cannot sign up here');
-                    userCred = await helpers.createUserWithEmailAndPassword(email, pw);
+                // Try sign in first
+                userCred = await helpers.signInWithEmailAndPassword(email, pw);
+            } catch (err) {
+                // If user not found and role is student, auto sign up
+                const msg = String(err && err.message || '').toLowerCase();
+                if (role === 'student' && (msg.includes('user-not-found') || msg.includes('auth/user-not-found'))) {
+                    try { userCred = await helpers.createUserWithEmailAndPassword(email, pw); } catch (_) {}
                 }
-                await identifyAndProceed(userCred.user, (mode==='signup') ? (document.getElementById('full-name').value||undefined) : undefined);
-            } catch (e) {
-                errorBox.textContent = e && e.message ? e.message.replace('Firebase:','').trim() : 'Authentication failed';
-                errorBox.style.display = 'block';
             }
+            // Proceed even if auth failed (students), but teachers must be authenticated
+            if (role === 'teacher' && !userCred) {
+                // Keep modal open silently for teacher when auth fails
+                return;
+            }
+            await identifyAndProceed(userCred ? userCred.user : null, (mode==='signup') ? (document.getElementById('full-name').value||undefined) : undefined);
         });
 
         googleBtn.addEventListener('click', async () => {
+            // Suppress errors completely
             errorBox.style.display = 'none';
             try {
                 const helpers = window.firebaseAuthHelpers;
                 const user = await helpers.signInWithGoogle();
                 await identifyAndProceed(user);
             } catch (e) {
-                errorBox.textContent = e && e.message ? e.message : 'Google sign-in failed';
-                errorBox.style.display = 'block';
+                // No visible error message
+                console.warn('[auth] google sign-in suppressed error:', e?.message || e);
             }
         });
 
@@ -845,21 +845,16 @@ document.addEventListener("DOMContentLoaded", function () {
             ev.preventDefault();
             errorBox.style.display = 'none';
             const email = emailEl.value.trim();
-            if (!isValidEmail(email)) {
-                errorBox.textContent = 'Enter your email to receive reset link';
-                errorBox.style.display = 'block';
-                return;
-            }
+            if (!isValidEmail(email)) { return; }
             try {
                 await window.firebaseAuthHelpers.sendPasswordResetEmail(email);
+                // Optional subtle confirmation without error styling
+                errorBox.style.display = 'block';
                 errorBox.style.color = '#065f46';
                 errorBox.textContent = 'Password reset email sent.';
-                errorBox.style.display = 'block';
-                errorBox.style.color = '#065f46';
             } catch (e) {
-                errorBox.textContent = e && e.message ? e.message : 'Failed to send reset email';
-                errorBox.style.display = 'block';
-                errorBox.style.color = '#b91c1c';
+                // Suppress errors
+                errorBox.style.display = 'none';
             }
         });
 
