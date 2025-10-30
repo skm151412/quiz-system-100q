@@ -3,42 +3,57 @@
   // Require Firebase Auth; redirect if not authenticated or not teacher
   const auth = window.firebaseAuth;
   const db = window.firebaseDb;
-  if (!auth) { location.href = 'index.html'; return; }
+  
+  if (!auth) { 
+    console.error('[Teacher] Firebase Auth not available');
+    location.href = '/index.html'; 
+    return; 
+  }
 
   function setHeaderUser(emailOrName){
     const el = document.getElementById('teacherEmail');
     if (el) el.textContent = emailOrName || '';
   }
 
-  async function ensureTeacherOrRedirect(user){
-    try {
-      // Merge minimal profile
-      await window.firebaseApiCall('/users/identify','POST', { role: 'teacher' });
-    } catch(_) {}
-    try {
-      // Fetch role via Firestore
-      const uid = user.uid;
-      // Direct Firestore read using SDK to check role
-      const { getDoc, doc } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
-      const snap = await getDoc(doc(db, 'users', uid));
-      const role = snap.exists() ? (snap.data().role || 'student') : 'student';
-      if (role !== 'teacher') {
-        alert('Unauthorized: teacher role required');
-        location.href = 'index.html';
-        return false;
-      }
-      setHeaderUser(user.email || user.displayName || '');
-      return true;
-    } catch (e) {
-      console.error('Role check failed', e);
-      location.href = 'index.html';
-      return false;
+  // Wait for auth module to load and protect the page
+  async function initTeacherDashboard() {
+    // Wait for auth module
+    if (!window.authModule) {
+      console.log('[Teacher] Waiting for auth module...');
+      await new Promise((resolve) => {
+        const checkInterval = setInterval(() => {
+          if (window.authModule) {
+            clearInterval(checkInterval);
+            resolve();
+          }
+        }, 100);
+        // Timeout after 5 seconds
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          resolve();
+        }, 5000);
+      });
     }
+
+    if (!window.authModule) {
+      console.error('[Teacher] Auth module not available');
+      location.href = '/index.html';
+      return;
+    }
+
+    // Protect page - only teachers allowed
+    window.authModule.protectPage('teacher', (user, role) => {
+      console.log('[Teacher] Access granted for:', user.email);
+      setHeaderUser(user.email || user.displayName || '');
+      // Load initial data
+      loadAttempts();
+    });
   }
 
-  window.firebaseAuthHelpers.onAuthStateChanged(async (user)=>{
-    if (!user) { location.href = 'index.html'; return; }
-    await ensureTeacherOrRedirect(user);
+  // Start initialization
+  initTeacherDashboard().catch(err => {
+    console.error('[Teacher] Initialization error:', err);
+    location.href = '/index.html';
   });
 
   // Tab switching
@@ -54,8 +69,12 @@
   }));
 
   document.getElementById('logoutBtn').addEventListener('click',async ()=>{
-    try { await window.firebaseAuthHelpers.signOut(); } catch(_) {}
-    location.href='index.html';
+    if (window.authModule) {
+      await window.authModule.signOutUser();
+    } else {
+      try { await window.firebaseAuthHelpers.signOut(); } catch(_) {}
+      location.href='/index.html';
+    }
   });
 
   async function api(endpoint, options={}) {

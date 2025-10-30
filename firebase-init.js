@@ -11,12 +11,7 @@ import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  signOut,
-  sendPasswordResetEmail,
-  GoogleAuthProvider,
-  signInWithPopup,
-  signInWithRedirect,
-  getRedirectResult
+  signOut
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 
 // Your web app's Firebase configuration (public client config)
@@ -45,20 +40,9 @@ window.firebaseAuthHelpers = {
   signInWithEmailAndPassword: (email, password) => signInWithEmailAndPassword(auth, email, password),
   createUserWithEmailAndPassword: (email, password) => createUserWithEmailAndPassword(auth, email, password),
   signOut: () => signOut(auth),
-  sendPasswordResetEmail: (email) => sendPasswordResetEmail(auth, email),
-  signInWithGoogle: async () => {
-    const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: 'select_account' });
-    const res = await signInWithPopup(auth, provider);
-    return res.user;
-  },
-  signInWithGoogleRedirect: async () => {
-    const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: 'select_account' });
-    await signInWithRedirect(auth, provider);
-  },
-  getGoogleRedirectResult: async () => {
-    const res = await getRedirectResult(auth);
-    return res?.user || null;
-  }
+  getCurrentUser: () => auth.currentUser
 };
+
+// Signal that Firebase is ready
+console.log('[Firebase] Initialization complete');
+window.FIREBASE_MODE = true;

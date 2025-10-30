@@ -70,37 +70,31 @@ document.addEventListener("DOMContentLoaded", function () {
         return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     }
 
-    // Internet connectivity detection
-    let isOnline = navigator.onLine;
+    // Internet connectivity detection - assume online initially for safety
     let connectionStatus = {
-        online: isOnline,
+        online: true, // Default to online, will be updated by checkInternetConnection
         lastChecked: new Date(),
         flightModeRequired: true
     };
 
     function updateConnectionStatus() {
         const wasOnline = connectionStatus.online;
-        connectionStatus.online = navigator.onLine;
-        connectionStatus.lastChecked = new Date();
+        // Run actual connection check instead of relying solely on navigator.onLine
+        checkInternetConnection();
         
-        console.log(`Status update: navigator.onLine changed from ${wasOnline} to ${connectionStatus.online}`);
-        
-        if (wasOnline !== connectionStatus.online) {
-            updateFlightModeIndicator();
-            updateQuizStartButton();
-        }
+        console.log(`Status update triggered: previous state was ${wasOnline ? 'online' : 'offline'}`);
     }
 
     function checkInternetConnection() {
         console.log("Performing connection check...");
         
-        // Use a more reliable technique to check internet connectivity
-        // We'll do a direct test to known external resources with actual fetch
-        // and consider it offline ONLY if ALL external resource tests fail
-        
-        // Prefer a same-origin, cache-busted health endpoint for connectivity check
-        const origin = location.origin || '';
-        const testUrls = [ `${origin}/health.txt` ];
+        // Check real internet connectivity using external URLs
+        // These are reliable endpoints that return 204 No Content
+        const testUrls = [
+            'https://www.google.com/generate-204',
+            'https://www.gstatic.com/generate_204',
+            'https://connectivitycheck.gstatic.com/generate_204'
+        ];
         
         // Create a fetch promise for each URL with a short timeout
         const fetchPromises = testUrls.map(url => {
@@ -108,16 +102,19 @@ document.addEventListener("DOMContentLoaded", function () {
                 // Use Date.now() to prevent caching
                 const nocacheUrl = `${url}?nc=${Date.now()}`;
                 
-                // Set a timeout for the fetch to avoid long waits
+                // Use AbortController for proper timeout handling
+                const controller = new AbortController();
                 const timeoutId = setTimeout(() => {
                     console.log(`Fetch timeout for ${url}`);
+                    controller.abort();
                     reject(new Error('Timeout'));
-                }, 2000);
+                }, 3000);
                 
                 fetch(nocacheUrl, { 
                     method: 'HEAD',
                     mode: 'no-cors',
-                    cache: 'no-store'
+                    cache: 'no-store',
+                    signal: controller.signal
                 })
                 .then(response => {
                     clearTimeout(timeoutId);
@@ -137,8 +134,10 @@ document.addEventListener("DOMContentLoaded", function () {
             .then(() => {
                 // At least one URL was reachable - we're online
                 console.log('ONLINE: At least one external resource reachable');
-                if (!connectionStatus.online) {
-                    connectionStatus.online = true;
+                const wasOffline = !connectionStatus.online;
+                connectionStatus.online = true;
+                connectionStatus.lastChecked = new Date();
+                if (wasOffline) {
                     updateFlightModeIndicator();
                     updateQuizStartButton();
                 }
@@ -146,10 +145,32 @@ document.addEventListener("DOMContentLoaded", function () {
             .catch(error => {
                 // ALL URLs failed - we're likely offline
                 console.log('OFFLINE: All external resources unreachable');
+                const wasOnline = connectionStatus.online;
                 connectionStatus.online = false;
-                updateFlightModeIndicator();
-                updateQuizStartButton();
+                connectionStatus.lastChecked = new Date();
+                if (wasOnline) {
+                    updateFlightModeIndicator();
+                    updateQuizStartButton();
+                }
             });
+    }
+
+    // Lightweight connectivity probe used during the quiz (no UI changes)
+    async function isInternetReachable(timeoutMs = 2000) {
+        const urls = [
+            'https://www.google.com/generate-204',
+            'https://www.gstatic.com/generate_204',
+            'https://connectivitycheck.gstatic.com/generate_204'
+        ];
+        const checks = urls.map(url => new Promise((resolve, reject) => {
+            const controller = new AbortController();
+            const t = setTimeout(() => { controller.abort(); reject(new Error('Timeout')); }, timeoutMs);
+            fetch(`${url}?nc=${Date.now()}`, {
+                method: 'HEAD', mode: 'no-cors', cache: 'no-store', signal: controller.signal
+            }).then(() => { clearTimeout(t); resolve(true); })
+              .catch(() => { clearTimeout(t); reject(false); });
+        }));
+        try { await Promise.any(checks); return true; } catch { return false; }
     }
 
     function updateFlightModeIndicator() {
@@ -461,11 +482,412 @@ document.addEventListener("DOMContentLoaded", function () {
         }
     }
 
+    // Initialize authentication - show login/signup page first
+    async function initializeAuthentication() {
+        try {
+            const authModule = window.authModule;
+
+            if (!authModule) {
+                console.error('[Quiz] Auth module not loaded, waiting...');
+                // Wait for auth module to load
+                await new Promise((resolve) => {
+                    const checkInterval = setInterval(() => {
+                        if (window.authModule) {
+                            clearInterval(checkInterval);
+                            resolve();
+                        }
+                    }, 100);
+                    // Timeout after 5 seconds
+                    setTimeout(() => {
+                        clearInterval(checkInterval);
+                        resolve();
+                    }, 5000);
+                });
+            }
+
+            if (!window.authModule) {
+                console.error('[Quiz] Auth module failed to load');
+                alert('Authentication system not available. Please refresh the page.');
+                return;
+            }
+
+            // Use auth module to handle authentication and role-based routing
+            authModule.handleAuthStateChange(
+                async (user, role) => {
+                    // User is authenticated and authorized for this page (student)
+                    console.log('[Quiz] User authenticated:', user.email, 'Role:', role);
+                    currentUserEmail = user.email;
+                    currentUserId = user.uid;
+                    currentUserRole = role;
+                    
+                    hideLoginPage();
+                    await initializeQuiz();
+                },
+                () => {
+                    // No user signed in, show login page
+                    console.log('[Quiz] No user authenticated, showing login page');
+                    showLoginPage();
+                }
+            );
+        } catch (error) {
+            console.error('[Quiz] Authentication initialization error:', error);
+            alert('Failed to initialize authentication. Please refresh the page.');
+        }
+    }
+
+    // Show login/signup page
+    function showLoginPage() {
+        const loginDiv = document.createElement('div');
+        loginDiv.id = 'auth-page';
+        loginDiv.innerHTML = `
+            <div class="auth-container">
+                <div class="auth-card">
+                    <div class="auth-header">
+                        <div class="auth-logo">
+                            <div class="logo-icon">📚</div>
+                        </div>
+                        <h2 class="auth-title">Welcome back</h2>
+                        <p class="auth-subtitle">Please enter your details to sign in</p>
+                    </div>
+
+                    <!-- Tab buttons for Sign In / Sign Up -->
+                    <div class="auth-tabs">
+                        <button class="auth-tab active" data-tab="signin">Student</button>
+                        <button class="auth-tab" data-tab="signup">Teacher</button>
+                    </div>
+
+                    <!-- Sign In Form -->
+                    <div class="auth-form" id="signin-form">
+                        <!-- Social Login Buttons -->
+                        <div class="social-login">
+                            <button class="social-btn google-btn" id="google-signin-btn">
+                                <svg width="18" height="18" viewBox="0 0 18 18">
+                                    <path fill="#4285F4" d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 0 0 2.38-5.88c0-.57-.05-.66-.15-1.18z"/>
+                                    <path fill="#34A853" d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2a4.8 4.8 0 0 1-7.18-2.54H1.83v2.07A8 8 0 0 0 8.98 17z"/>
+                                    <path fill="#FBBC05" d="M4.5 10.52a4.8 4.8 0 0 1 0-3.04V5.41H1.83a8 8 0 0 0 0 7.18l2.67-2.07z"/>
+                                    <path fill="#EA4335" d="M8.98 4.18c1.17 0 2.23.4 3.06 1.2l2.3-2.3A8 8 0 0 0 1.83 5.4L4.5 7.49a4.77 4.77 0 0 1 4.48-3.3z"/>
+                                </svg>
+                                Continue with Google
+                            </button>
+                        </div>
+
+                        <div class="auth-divider">
+                            <span>OR</span>
+                        </div>
+
+                        <!-- Email/Password Sign In -->
+                        <div class="form-group">
+                            <label for="signin-email">Your Email Address</label>
+                            <input type="email" id="signin-email" placeholder="Your Email Address" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="signin-password">Password</label>
+                            <div class="password-input-wrapper">
+                                <input type="password" id="signin-password" placeholder="••••••••••" required>
+                                <button type="button" class="password-toggle" data-target="signin-password">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                        <circle cx="12" cy="12" r="3"></circle>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="form-options">
+                            <label class="remember-me">
+                                <input type="checkbox" id="remember-me">
+                                <span>Remember me</span>
+                            </label>
+                            <a href="#" class="forgot-password">Forgot Password?</a>
+                        </div>
+
+                        <button class="auth-submit-btn" id="signin-btn">LOGIN</button>
+
+                        <div class="auth-footer">
+                            Don't have an account? <a href="#" class="auth-switch" data-switch="signup">Sign up</a>
+                        </div>
+
+                        <div id="signin-error" class="auth-error" style="display: none;"></div>
+                    </div>
+
+                    <!-- Sign Up Form -->
+                    <div class="auth-form" id="signup-form" style="display: none;">
+                        <!-- Social Login Buttons -->
+                        <div class="social-login">
+                            <button class="social-btn google-btn" id="google-signup-btn">
+                                <svg width="18" height="18" viewBox="0 0 18 18">
+                                    <path fill="#4285F4" d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 0 0 2.38-5.88c0-.57-.05-.66-.15-1.18z"/>
+                                    <path fill="#34A853" d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2a4.8 4.8 0 0 1-7.18-2.54H1.83v2.07A8 8 0 0 0 8.98 17z"/>
+                                    <path fill="#FBBC05" d="M4.5 10.52a4.8 4.8 0 0 1 0-3.04V5.41H1.83a8 8 0 0 0 0 7.18l2.67-2.07z"/>
+                                    <path fill="#EA4335" d="M8.98 4.18c1.17 0 2.23.4 3.06 1.2l2.3-2.3A8 8 0 0 0 1.83 5.4L4.5 7.49a4.77 4.77 0 0 1 4.48-3.3z"/>
+                                </svg>
+                                Continue with Google
+                            </button>
+                        </div>
+
+                        <div class="auth-divider">
+                            <span>OR</span>
+                        </div>
+
+                        <!-- Email/Password Sign Up -->
+                        <div class="form-group">
+                            <label for="signup-email">Your Email Address</label>
+                            <input type="email" id="signup-email" placeholder="Your Email Address" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="signup-password">Password</label>
+                            <div class="password-input-wrapper">
+                                <input type="password" id="signup-password" placeholder="••••••••••" required>
+                                <button type="button" class="password-toggle" data-target="signup-password">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                        <circle cx="12" cy="12" r="3"></circle>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        <button class="auth-submit-btn" id="signup-btn">Sign in</button>
+
+                        <div class="auth-footer">
+                            Don't have an account? <a href="#" class="auth-switch" data-switch="signin">Sign up</a>
+                        </div>
+
+                        <div id="signup-error" class="auth-error" style="display: none;"></div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        loginDiv.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            overflow-y: auto;
+        `;
+
+        document.body.appendChild(loginDiv);
+
+        // Add event listeners
+        setupAuthEventListeners();
+    }
+
+    // Hide login page
+    function hideLoginPage() {
+        const loginPage = document.getElementById('auth-page');
+        if (loginPage) {
+            loginPage.remove();
+        }
+    }
+
+    // Setup authentication event listeners
+    function setupAuthEventListeners() {
+        const authHelpers = window.firebaseAuthHelpers;
+
+        // Tab switching (Student/Teacher - visual only for now)
+        document.querySelectorAll('.auth-tab').forEach(tab => {
+            tab.addEventListener('click', function() {
+                document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+                this.classList.add('active');
+            });
+        });
+
+        // Form switching (Sign In / Sign Up)
+        document.querySelectorAll('.auth-switch').forEach(link => {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                const targetForm = this.getAttribute('data-switch');
+                
+                if (targetForm === 'signup') {
+                    document.getElementById('signin-form').style.display = 'none';
+                    document.getElementById('signup-form').style.display = 'block';
+                } else {
+                    document.getElementById('signup-form').style.display = 'none';
+                    document.getElementById('signin-form').style.display = 'block';
+                }
+            });
+        });
+
+        // Password toggle
+        document.querySelectorAll('.password-toggle').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const targetId = this.getAttribute('data-target');
+                const input = document.getElementById(targetId);
+                
+                if (input.type === 'password') {
+                    input.type = 'text';
+                } else {
+                    input.type = 'password';
+                }
+            });
+        });
+
+        // Sign In
+        document.getElementById('signin-btn').addEventListener('click', async function() {
+            const email = document.getElementById('signin-email').value.trim();
+            const password = document.getElementById('signin-password').value;
+            const errorDiv = document.getElementById('signin-error');
+
+            if (!email || !password) {
+                errorDiv.textContent = 'Please enter both email and password';
+                errorDiv.style.display = 'block';
+                return;
+            }
+
+            try {
+                this.disabled = true;
+                this.textContent = 'Signing in...';
+                errorDiv.style.display = 'none';
+
+                await authHelpers.signInWithEmailAndPassword(email, password);
+                // Auth state change will handle the rest
+            } catch (error) {
+                console.error('Sign in error:', error);
+                errorDiv.textContent = getAuthErrorMessage(error);
+                errorDiv.style.display = 'block';
+                this.disabled = false;
+                this.textContent = 'LOGIN';
+            }
+        });
+
+        // Sign Up
+        document.getElementById('signup-btn').addEventListener('click', async function() {
+            const email = document.getElementById('signup-email').value.trim();
+            const password = document.getElementById('signup-password').value;
+            const errorDiv = document.getElementById('signup-error');
+
+            if (!email || !password) {
+                errorDiv.textContent = 'Please enter both email and password';
+                errorDiv.style.display = 'block';
+                return;
+            }
+
+            if (password.length < 6) {
+                errorDiv.textContent = 'Password must be at least 6 characters';
+                errorDiv.style.display = 'block';
+                return;
+            }
+
+            try {
+                this.disabled = true;
+                this.textContent = 'Creating account...';
+                errorDiv.style.display = 'none';
+
+                // Determine role based on active tab
+                const activeTab = document.querySelector('.auth-tab.active');
+                const selectedRole = activeTab && activeTab.textContent.toLowerCase().includes('teacher') ? 'teacher' : 'student';
+                console.log('[Signup] Creating account with role:', selectedRole);
+
+                // Create user account
+                const userCredential = await authHelpers.createUserWithEmailAndPassword(email, password);
+                const user = userCredential.user;
+
+                // Set role in Firestore immediately after account creation
+                if (window.authModule && user) {
+                    await window.authModule.updateUserRole(user.uid, selectedRole);
+                    console.log('[Signup] Role set successfully:', selectedRole);
+                }
+
+                // Auth state change will handle the rest (redirect based on role)
+            } catch (error) {
+                console.error('Sign up error:', error);
+                errorDiv.textContent = getAuthErrorMessage(error);
+                errorDiv.style.display = 'block';
+                this.disabled = false;
+                this.textContent = 'Sign in';
+            }
+        });
+
+        // Google Sign In (both buttons)
+        const setupGoogleSignIn = (btnId) => {
+            document.getElementById(btnId).addEventListener('click', async function() {
+                const errorDiv = btnId.includes('signin') ? 
+                    document.getElementById('signin-error') : 
+                    document.getElementById('signup-error');
+
+                try {
+                    this.disabled = true;
+                    errorDiv.style.display = 'none';
+
+                    // Import GoogleAuthProvider
+                    const { GoogleAuthProvider, signInWithPopup } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js');
+                    const provider = new GoogleAuthProvider();
+                    const auth = window.firebaseAuth;
+
+                    await signInWithPopup(auth, provider);
+                    // Auth state change will handle the rest
+                } catch (error) {
+                    console.error('Google sign in error:', error);
+                    errorDiv.textContent = getAuthErrorMessage(error);
+                    errorDiv.style.display = 'block';
+                    this.disabled = false;
+                }
+            });
+        };
+
+        setupGoogleSignIn('google-signin-btn');
+        setupGoogleSignIn('google-signup-btn');
+
+        // Enter key support
+        ['signin-email', 'signin-password'].forEach(id => {
+            document.getElementById(id).addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    document.getElementById('signin-btn').click();
+                }
+            });
+        });
+
+        ['signup-email', 'signup-password'].forEach(id => {
+            document.getElementById(id).addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    document.getElementById('signup-btn').click();
+                }
+            });
+        });
+    }
+
+    // Get user-friendly error message
+    function getAuthErrorMessage(error) {
+        const errorCode = error.code || '';
+        
+        switch (errorCode) {
+            case 'auth/invalid-email':
+                return 'Invalid email address';
+            case 'auth/user-disabled':
+                return 'This account has been disabled';
+            case 'auth/user-not-found':
+                return 'No account found with this email';
+            case 'auth/wrong-password':
+                return 'Incorrect password';
+            case 'auth/email-already-in-use':
+                return 'An account with this email already exists';
+            case 'auth/weak-password':
+                return 'Password should be at least 6 characters';
+            case 'auth/operation-not-allowed':
+                return 'Email/password accounts are not enabled';
+            case 'auth/popup-closed-by-user':
+                return 'Sign in popup was closed';
+            case 'auth/cancelled-popup-request':
+                return 'Only one popup request is allowed at a time';
+            default:
+                return error.message || 'Authentication failed. Please try again.';
+        }
+    }
+
     // Initialize quiz
     async function initializeQuiz() {
         try {
-            // Show authentication first, then prerequisites
-            showUserIdentificationPage();
+            // Show prerequisite screen
+            showPrerequisites();
         } catch (error) {
             console.error('Quiz initialization error:', error);
             alert('Failed to initialize quiz. Please refresh the page.');
@@ -479,7 +901,12 @@ document.addEventListener("DOMContentLoaded", function () {
         prerequisiteDiv.classList.add("prerequisite");
         prerequisiteDiv.innerHTML = `
             <div class="prerequisite-content">
-                <h2>Computer Science Fundamentals Quiz</h2>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2 style="margin: 0;">Computer Science Fundamentals Quiz</h2>
+                    <button onclick="handleLogout()" style="padding: 8px 16px; background: #e74c3c; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600;">
+                        🚪 Logout
+                    </button>
+                </div>
                 <div class="quiz-details">
                     <p><strong>100 Questions</strong> covering 4 major subjects:</p>
                     <ul style="list-style: none; padding: 0;">
@@ -538,18 +965,24 @@ document.addEventListener("DOMContentLoaded", function () {
 
         document.body.appendChild(prerequisiteDiv);
 
-        // Initialize connection status check
+        // Initialize connection status check immediately
+        console.log('Prerequisites shown, starting connection checks...');
+        
+        // Run immediate check
+        checkInternetConnection();
+        
+        // Run additional checks for better accuracy
         setTimeout(() => {
-            // Initial check
             checkInternetConnection();
-            
-            // Secondary check after a delay for better accuracy
-            setTimeout(() => {
-                checkInternetConnection();
-                updateFlightModeIndicator();
-                updateQuizStartButton();
-            }, 1000);
+            updateFlightModeIndicator();
+            updateQuizStartButton();
         }, 500);
+        
+        setTimeout(() => {
+            checkInternetConnection();
+            updateFlightModeIndicator();
+            updateQuizStartButton();
+        }, 1500);
 
         // Kick off background prefetch while the user is online on the landing screen
         prefetchQuizDataIfOnline();
@@ -564,13 +997,54 @@ document.addEventListener("DOMContentLoaded", function () {
                 statusText.textContent = '🔄 Checking connection status...';
             }
             
-            // Clear any previous checks and run a new one
+            // Run connection check
             checkInternetConnection();
             
             // Run a second check after a delay for better accuracy
             setTimeout(() => {
                 checkInternetConnection();
+                updateFlightModeIndicator();
+                updateQuizStartButton();
             }, 1000);
+        };
+
+        // Logout handler
+        window.handleLogout = async function() {
+            if (confirm('Are you sure you want to logout?')) {
+                try {
+                    const authHelpers = window.firebaseAuthHelpers;
+                    await authHelpers.signOut();
+                    console.log('User signed out successfully');
+                    
+                    // Remove prerequisite page
+                    const prerequisiteDiv = document.querySelector('.prerequisite');
+                    if (prerequisiteDiv) {
+                        prerequisiteDiv.remove();
+                    }
+                    
+                    // Show login page will be triggered by onAuthStateChanged
+                } catch (error) {
+                    console.error('Logout error:', error);
+                    alert('Failed to logout. Please try again.');
+                }
+            }
+        };
+
+        // Logout handler for quiz page (during active quiz)
+        window.handleQuizLogout = async function() {
+            if (confirm('⚠️ Warning: Logging out will end your current quiz session. All progress will be lost.\n\nAre you sure you want to logout?')) {
+                try {
+                    const authHelpers = window.firebaseAuthHelpers;
+                    await authHelpers.signOut();
+                    console.log('User signed out from quiz');
+                    
+                    // Reload the page to reset everything
+                    window.location.reload();
+                } catch (error) {
+                    console.error('Logout error:', error);
+                    alert('Failed to logout. Please try again.');
+                }
+            }
         };
 
     window.verifyPasswordAndStart = async function() {
@@ -578,6 +1052,7 @@ document.addEventListener("DOMContentLoaded", function () {
             console.log('=== Quiz Start Attempt ===');
             console.log('connectionStatus.online:', connectionStatus.online);
             console.log('connectionStatus.lastChecked:', connectionStatus.lastChecked);
+            console.log('navigator.onLine:', navigator.onLine);
             
             // Run a quick connection check first
             await new Promise(resolve => {
@@ -588,32 +1063,43 @@ document.addEventListener("DOMContentLoaded", function () {
                 }
                 
                 // Create a separate promise just for this final check
-                const testUrls = ['https://www.google.com/generate-204'];
+                const testUrls = ['https://www.google.com/generate-204', 'https://www.gstatic.com/generate_204'];
                 
                 const fetchPromises = testUrls.map(url => {
                     return new Promise((resolve, reject) => {
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 2000);
+                        
                         fetch(`${url}?nc=${Date.now()}`, { 
                             method: 'HEAD',
                             mode: 'no-cors',
-                            cache: 'no-store'
+                            cache: 'no-store',
+                            signal: controller.signal
                         })
-                        .then(() => resolve(true))
-                        .catch(() => reject(false));
+                        .then(() => {
+                            clearTimeout(timeoutId);
+                            resolve(true);
+                        })
+                        .catch(() => {
+                            clearTimeout(timeoutId);
+                            reject(false);
+                        });
                     });
                 });
                 
                 Promise.any(fetchPromises)
                     .then(() => {
+                        console.log('Connection check: ONLINE detected');
                         connectionStatus.online = true;
+                        connectionStatus.lastChecked = new Date();
                         resolve();
                     })
                     .catch(() => {
+                        console.log('Connection check: OFFLINE detected');
                         connectionStatus.online = false;
+                        connectionStatus.lastChecked = new Date();
                         resolve();
                     });
-                
-                // Set a timeout to ensure we don't wait too long
-                setTimeout(resolve, 2000);
             });
             
             updateFlightModeIndicator();
@@ -636,270 +1122,16 @@ document.addEventListener("DOMContentLoaded", function () {
                 return;
             }
 
-            console.log('Password verified locally – proceeding to start quiz flow');
-            // At this stage, user is already authenticated; proceed to load quiz
-            prerequisiteDiv.remove();
+            console.log('Password verified locally – starting quiz');
+            // Start quiz immediately - find and remove prerequisite div
+            const prerequisiteDiv = document.querySelector('.prerequisite');
+            if (prerequisiteDiv) {
+                prerequisiteDiv.remove();
+            }
             loadQuizData();
         };
     }
 
-    // New: authentication modal with role selection and tabs
-    function showUserIdentificationPage() {
-        const modal = document.createElement('div');
-        modal.id = 'auth-modal';
-        modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:2000;padding:20px;overflow:auto;';
-
-        modal.innerHTML = `
-          <div style="width: 100%; max-width: 520px; background: #ffffff; color:#1a1a1a; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.35); overflow: hidden; font-family: system-ui, Segoe UI, Arial, sans-serif;">
-            <div style="padding: 16px; border-bottom: 1px solid #eef1f4; display:flex; justify-content:center;">
-              <div id="roleSwitch" style="display:inline-flex; background:#f1f5f9; padding:4px; border-radius:999px;">
-                <button data-role="student" class="role-btn active" style="padding:8px 14px;border-radius:999px;border:none;background:#2563eb;color:#fff;font-weight:600;cursor:pointer;">Student</button>
-                <button data-role="teacher" class="role-btn" style="padding:8px 14px;border-radius:999px;border:none;background:transparent;color:#1f2937;font-weight:600;cursor:pointer;">Teacher</button>
-              </div>
-            </div>
-            <div style="padding: 16px 18px 0; display:flex; gap:8px; justify-content:center;">
-              <button id="tab-signup" class="tab-btn" aria-selected="false" style="flex:0 0 auto;padding:10px 18px;border-radius:999px;border:1px solid #d1d5db;background:#fff;color:#111;cursor:pointer;">Sign up</button>
-              <button id="tab-login" class="tab-btn active" aria-selected="true" style="flex:0 0 auto;padding:10px 18px;border-radius:999px;border:1px solid #2563eb;background:#2563eb;color:#fff;font-weight:600;cursor:pointer;">Login</button>
-            </div>
-            <div style="padding: 18px 24px 24px;">
-              <h2 id="auth-title" style="margin: 0 0 12px; font-size: 22px;">Log in to your existing profile</h2>
-
-              <button id="google-btn" style="width:100%;display:flex;align-items:center;justify-content:center;gap:10px;border:1px solid #d1d5db;background:#f3f4f6;padding:12px 14px;border-radius:10px;cursor:pointer;font-weight:600;color:#374151;">
-                <span style="font-size:18px;">🟦</span> Continue with Google
-              </button>
-
-              <div style="display:flex;align-items:center;gap:16px;margin:14px 0 10px;color:#9aa3af;">
-                <div style="flex:1;height:1px;background:#e5e7eb;"></div>
-                <span>OR</span>
-                <div style="flex:1;height:1px;background:#e5e7eb;"></div>
-              </div>
-
-              <div id="name-wrap" style="margin-bottom:10px; display:none;">
-                <label style="display:block;font-weight:600;margin-bottom:6px;">Full Name (optional)</label>
-                <input id="full-name" type="text" maxlength="100" placeholder="e.g. John Doe" style="width:100%;padding:12px;border-radius:10px;border:1px solid #d1d5db;outline:none;">
-              </div>
-
-                            <div style="margin-bottom:10px;">
-                                <label style="display:block;font-weight:600;margin-bottom:6px;">Email</label>
-                                <input id="email" type="email" placeholder="name@example.com" style="width:100%;padding:12px;border-radius:10px;border:1px solid #d1d5db;outline:none;">
-                            </div>
-
-              <div style="margin-bottom:4px; position:relative;">
-                <label style="display:block;font-weight:600;margin-bottom:6px;">Password</label>
-                <input id="password" type="password" placeholder="Enter password" style="width:100%;padding:12px 44px 12px 12px;border-radius:10px;border:1px solid #d1d5db;outline:none;">
-                <button id="togglePw" type="button" aria-label="Show password" style="position:absolute;right:8px;top:34px;border:none;background:transparent;cursor:pointer;font-size:16px;">👁️</button>
-              </div>
-
-              <div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0 12px;">
-                <a id="forgotLink" href="#" style="text-decoration:none;color:#2563eb;font-weight:600;">Forgot Password?</a>
-                <div id="form-error" style="color:#b91c1c;font-weight:600;display:none;" aria-live="polite"></div>
-              </div>
-
-              <button id="primaryAuthBtn" style="width:100%;padding:12px 16px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-size:16px;font-weight:700;cursor:pointer;">LOGIN</button>
-            </div>
-          </div>
-        `;
-
-        document.body.appendChild(modal);
-
-        const roleButtons = modal.querySelectorAll('.role-btn');
-        const tabSignup = modal.querySelector('#tab-signup');
-        const tabLogin = modal.querySelector('#tab-login');
-        const authTitle = modal.querySelector('#auth-title');
-        const nameWrap = modal.querySelector('#name-wrap');
-        const emailEl = modal.querySelector('#email');
-        const pwEl = modal.querySelector('#password');
-        const togglePwBtn = modal.querySelector('#togglePw');
-        const primaryBtn = modal.querySelector('#primaryAuthBtn');
-        const errorBox = modal.querySelector('#form-error');
-        const googleBtn = modal.querySelector('#google-btn');
-        const forgotLink = modal.querySelector('#forgotLink');
-
-        // Simplify to Google-only option: hide tabs, email/password, and primary button
-        try {
-            if (tabSignup) tabSignup.style.display = 'none';
-            if (tabLogin) tabLogin.style.display = 'none';
-            if (nameWrap) nameWrap.style.display = 'none';
-            if (emailEl && emailEl.parentElement) emailEl.parentElement.style.display = 'none';
-            if (pwEl && pwEl.parentElement) pwEl.parentElement.style.display = 'none';
-            if (forgotLink) forgotLink.style.display = 'none';
-            if (primaryBtn) primaryBtn.style.display = 'none';
-            authTitle.textContent = 'Continue with your account';
-            // Hide the visual OR divider if present
-            const orDivider = Array.from(modal.querySelectorAll('div')).find(d => d.textContent && d.textContent.trim() === 'OR');
-            if (orDivider && orDivider.parentElement) orDivider.parentElement.style.display = 'none';
-        } catch(_) {}
-
-        let role = 'student';
-        let mode = 'login'; // 'login' | 'signup'
-
-        const updateUiForState = () => {
-            // Role -> affect tabs availability
-            const teacher = role === 'teacher';
-            if (teacher) {
-                // Disable signup for teachers
-                tabSignup.setAttribute('disabled', 'true');
-                tabSignup.style.opacity = '0.5';
-                if (mode === 'signup') mode = 'login';
-                tabLogin.classList.add('active');
-                tabSignup.classList.remove('active');
-                authTitle.textContent = 'Log in to your teacher account';
-                primaryBtn.textContent = 'LOGIN';
-                nameWrap.style.display = 'none';
-            } else {
-                tabSignup.removeAttribute('disabled');
-                tabSignup.style.opacity = '1';
-                authTitle.textContent = (mode === 'login') ? 'Log in to your existing profile' : 'Create your student profile';
-                // Student flow: always allow continue regardless of sign-up state
-                primaryBtn.textContent = 'CONTINUE';
-                nameWrap.style.display = (mode === 'signup') ? 'block' : 'none';
-            }
-        };
-
-        roleButtons.forEach(btn => {
-            btn.addEventListener('click', () => {
-                roleButtons.forEach(b => { b.classList.remove('active'); b.style.background = 'transparent'; b.style.color = '#1f2937'; });
-                btn.classList.add('active');
-                btn.style.background = '#2563eb';
-                btn.style.color = '#fff';
-                role = btn.dataset.role;
-                updateUiForState();
-            });
-        });
-
-        tabLogin.addEventListener('click', () => { mode = 'login'; tabLogin.classList.add('active'); tabLogin.style.background='#2563eb'; tabLogin.style.color='#fff'; tabSignup.classList.remove('active'); tabSignup.style.background='#fff'; tabSignup.style.color='#111'; updateUiForState(); });
-        tabSignup.addEventListener('click', () => { if (role==='teacher') return; mode = 'signup'; tabSignup.classList.add('active'); tabSignup.style.background='#2563eb'; tabSignup.style.color='#fff'; tabLogin.classList.remove('active'); tabLogin.style.background='#fff'; tabLogin.style.color='#111'; updateUiForState(); });
-
-        togglePwBtn.addEventListener('click', () => {
-            const t = pwEl.getAttribute('type') === 'password' ? 'text' : 'password';
-            pwEl.setAttribute('type', t);
-        });
-
-        function isValidEmail(email) {
-            const v = String(email||'').trim();
-            // Basic RFC 5322-lite email pattern
-            return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);
-        }
-
-        async function identifyAndProceed(user, extraName) {
-            try {
-                currentUserEmail = user?.email || (emailEl ? emailEl.value.trim() : null);
-                currentUserFullName = extraName || user?.displayName || null;
-                currentUsername = (currentUserEmail ? currentUserEmail.split('@')[0] : null);
-                currentUserRole = role;
-                const saved = await apiCall('/users/identify', 'POST', {
-                    username: currentUsername,
-                    email: currentUserEmail,
-                    fullName: currentUserFullName,
-                    role: currentUserRole
-                });
-                currentUserId = saved?.id || (window.firebaseAuth?.currentUser?.uid) || null;
-            } catch (e) {
-                // queue offline payload
-                offlineUserPayload = {
-                    username: currentUsername,
-                    email: currentUserEmail,
-                    fullName: currentUserFullName,
-                    role: currentUserRole
-                };
-                persistOfflineUserPayload();
-            }
-            // Confirm effective role from server if available
-            let effectiveRole = role;
-            try {
-                const me = await apiCall('/users/me', 'GET');
-                if (me && me.role) effectiveRole = me.role;
-            } catch(_) {}
-
-            modal.remove();
-            if (effectiveRole === 'teacher') {
-                window.location.href = 'teacher.html';
-            } else {
-                showPrerequisites();
-            }
-        }
-
-        primaryBtn.addEventListener('click', async () => {
-            // Suppress visible error messages per request
-            errorBox.style.display = 'none';
-            const email = emailEl.value.trim();
-            const pw = pwEl.value.trim();
-            if (!isValidEmail(email) || pw.length < 6) {
-                // Do nothing visually; keep user on modal
-                return;
-            }
-            const helpers = window.firebaseAuthHelpers;
-            let userCred = null;
-            try {
-                // Try sign in first
-                userCred = await helpers.signInWithEmailAndPassword(email, pw);
-            } catch (err) {
-                // If user not found and role is student, auto sign up
-                const msg = String(err && err.message || '').toLowerCase();
-                if (role === 'student' && (msg.includes('user-not-found') || msg.includes('auth/user-not-found'))) {
-                    try { userCred = await helpers.createUserWithEmailAndPassword(email, pw); } catch (_) {}
-                }
-            }
-            // Proceed even if auth failed (students), but teachers must be authenticated
-            if (role === 'teacher' && !userCred) {
-                // Keep modal open silently for teacher when auth fails
-                return;
-            }
-            await identifyAndProceed(userCred ? userCred.user : null, (mode==='signup') ? (document.getElementById('full-name').value||undefined) : undefined);
-        });
-
-        googleBtn.addEventListener('click', async () => {
-            // Suppress errors completely
-            errorBox.style.display = 'none';
-            try {
-                const helpers = window.firebaseAuthHelpers;
-                let user = null;
-                try {
-                    user = await helpers.signInWithGoogle();
-                } catch (e) {
-                    const code = (e && e.code) || '';
-                    if (String(code).includes('popup') || String((e && e.message) || '').toLowerCase().includes('popup')) {
-                        await helpers.signInWithGoogleRedirect();
-                        return; // redirect flow will reload the page
-                    }
-                    throw e;
-                }
-                await identifyAndProceed(user);
-            } catch (e) {
-                // No visible error message
-                console.warn('[auth] google sign-in suppressed error:', e?.message || e);
-            }
-        });
-
-        forgotLink.addEventListener('click', async (ev) => {
-            ev.preventDefault();
-            errorBox.style.display = 'none';
-            const email = emailEl.value.trim();
-            if (!isValidEmail(email)) { return; }
-            try {
-                await window.firebaseAuthHelpers.sendPasswordResetEmail(email);
-                // Optional subtle confirmation without error styling
-                errorBox.style.display = 'block';
-                errorBox.style.color = '#065f46';
-                errorBox.textContent = 'Password reset email sent.';
-            } catch (e) {
-                // Suppress errors
-                errorBox.style.display = 'none';
-            }
-        });
-
-        // Initial state
-        updateUiForState();
-        // Handle redirect result (if popups were blocked)
-        (async () => {
-            try {
-                const user = await (window.firebaseAuthHelpers && window.firebaseAuthHelpers.getGoogleRedirectResult ? window.firebaseAuthHelpers.getGoogleRedirectResult() : null);
-                if (user) {
-                    await identifyAndProceed(user);
-                }
-            } catch(_) {}
-        })();
-    }
     // Load quiz data from backend
     async function loadQuizData() {
         try {
@@ -1096,6 +1328,7 @@ document.addEventListener("DOMContentLoaded", function () {
     // Start quiz functionality
     function startQuiz() {
         quizStarted = true;
+        console.log('Quiz started! quizStarted =', quizStarted);
         document.querySelector('.container').style.display = 'flex';
 
         // Set up timer based on quiz configuration (90 minutes for 100 questions)
@@ -1138,7 +1371,9 @@ document.addEventListener("DOMContentLoaded", function () {
         setupEventListeners();
 
         // Student-only: auto-submit if internet turns ON after starting (anti-cheat)
+        console.log('Setting up internet detection... currentUserRole:', currentUserRole);
         if (currentUserRole === 'student') {
+            console.log('Internet detection enabled for student role');
             const initiateCountdown = () => {
                 if (!quizStarted || quizCompleted || autoSubmitCountdownActive) return;
                 autoSubmitCountdownActive = true;
@@ -1200,19 +1435,42 @@ document.addEventListener("DOMContentLoaded", function () {
                 }, 1000);
             };
 
-            const handleOnline = () => {
-                if (quizStarted && !quizCompleted) initiateCountdown();
+            const handleOnline = async () => {
+                if (quizStarted && !quizCompleted && !autoSubmitCountdownActive) {
+                    // Double-check real internet reachability to avoid false positives
+                    const reachable = await isInternetReachable(2000);
+                    if (reachable) {
+                        console.log('Internet detected during quiz! Initiating countdown...');
+                        initiateCountdown();
+                    } else {
+                        console.log('Online event fired, but external check failed – staying in offline mode');
+                    }
+                }
             };
-            window.addEventListener('online', handleOnline, { once: true });
-            networkMonitorInterval = setInterval(() => {
-                if (navigator.onLine && quizStarted && !quizCompleted && !autoSubmitCountdownActive) {
-                    handleOnline();
+            
+            // Listen for online events (multiple times, not just once)
+            window.addEventListener('online', handleOnline);
+            
+            // Also check periodically via network monitoring
+            networkMonitorInterval = setInterval(async () => {
+                if (quizStarted && !quizCompleted && !autoSubmitCountdownActive) {
+                    const reachable = await isInternetReachable(2000);
+                    if (reachable) {
+                        console.log('Periodic check: Internet detected during quiz!');
+                        initiateCountdown();
+                    }
                 }
             }, 4000);
         }
 
         // Show first question
         showQuestion(0);
+        
+        // Show logout button when quiz starts
+        const logoutBtn = document.getElementById('quiz-logout-btn');
+        if (logoutBtn) {
+            logoutBtn.style.display = 'block';
+        }
     }
 
     // Set up event listeners
@@ -1745,8 +2003,8 @@ document.addEventListener("DOMContentLoaded", function () {
         document.querySelectorAll('.options label.correct-answer').forEach(label => { label.classList.remove('correct-answer'); });
     }
 
-    // Initialize the quiz when page loads
-    initializeQuiz();
+    // Initialize authentication check first, then quiz
+    initializeAuthentication();
 });
 
 // === Optional Runtime Customization Utilities ===

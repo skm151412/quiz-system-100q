@@ -95,15 +95,6 @@ async function identifyUser(payload) {
   return { id: uid };
 }
 
-// Get current user's profile document
-async function getCurrentUser() {
-  const user = requireAuth();
-  const d = await getDoc(doc(db, 'users', String(user.uid)));
-  if (!d.exists()) return { id: user.uid, email: user.email || null, role: null };
-  const u = d.data();
-  return { id: user.uid, email: u.email || user.email || null, fullName: u.fullName || null, role: u.role || null, username: u.username || null };
-}
-
 // Start attempt
 async function startAttempt(quizId) {
   const user = requireAuth();
@@ -319,9 +310,6 @@ async function firebaseApiCall(endpoint, method = 'GET', body = null) {
   // Users
   if (path === '/users/identify' && method === 'POST') {
     return await identifyUser(body);
-  }
-  if (path === '/users/me' && method === 'GET') {
-    return await getCurrentUser();
   }
 
   // Quiz public endpoints (assume quizId=1 unless provided)

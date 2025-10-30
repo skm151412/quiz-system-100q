@@ -26,16 +26,9 @@ service cloud.firestore {
 
     // Users collection keyed by auth uid
     match /users/{userId} {
-      allow read: if request.auth != null && (request.auth.uid == userId || isTeacher());
-      // Prevent role escalation: a user can write their own doc but cannot set role to 'teacher'
-      // unless they were already a teacher. Teachers can write any user.
-      allow write: if request.auth != null && (
-        (
-          request.auth.uid == userId &&
-          // new role must not be 'teacher' unless it was already 'teacher'
-          (request.resource.data.role != 'teacher' || (resource.data.role == 'teacher'))
-        ) || isTeacher()
-      );
+      allow read: if request.auth != null && request.auth.uid == userId || isTeacher();
+      // Users can create/update their own profile document; teachers can update any
+      allow write: if request.auth != null && (request.auth.uid == userId || isTeacher());
     }
 
     // Attempts: users can create/read/update only their own attempt docs
