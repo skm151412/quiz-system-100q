@@ -38,6 +38,7 @@ jobs:
         run: |
           mkdir -p androidapp/app/src/main/java/com/quiz/app
           mkdir -p androidapp/app/src/main/res/values
+          mkdir -p androidapp/app/src/main/res/layout
           # settings.gradle
           cat > androidapp/settings.gradle << 'EOF'
           rootProject.name = 'QuizApp'
@@ -96,9 +97,10 @@ jobs:
               }
           }
 
-          dependencies {
-              implementation 'androidx.appcompat:appcompat:1.7.0'
-          }
+      dependencies {
+        implementation 'androidx.appcompat:appcompat:1.7.0'
+        implementation 'com.google.android.material:material:1.12.0'
+      }
           EOF
 
           # proguard
@@ -133,6 +135,13 @@ jobs:
           </resources>
           EOF
 
+      # strings.xml
+      cat > androidapp/app/src/main/res/values/strings.xml << 'EOF'
+      <resources>
+        <string name="app_name">QuizApp</string>
+      </resources>
+      EOF
+
           # MainActivity.java
           cat > androidapp/app/src/main/java/com/quiz/app/MainActivity.java << 'EOF'
           package com.quiz.app;
@@ -165,7 +174,10 @@ jobs:
 
       - name: Build debug APK (Gradle)
         working-directory: androidapp
-        run: ./gradlew assembleDebug
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --version
+          ./gradlew assembleDebug --stacktrace --warning-mode all
 
       - name: Copy APK to repo
         run: |
@@ -178,6 +190,17 @@ jobs:
         with:
           name: quiz-app-debug-apk
           path: apk/quiz-app-debug.apk
+          if-no-files-found: warn
+
+      - name: Upload Gradle reports (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-reports
+          path: |
+            androidapp/app/build/outputs/**/*
+            androidapp/app/build/reports/**/*
+            androidapp/build/reports/**/*
           if-no-files-found: warn
 
       - name: Commit APK artifact to branch
