@@ -9,6 +9,14 @@ permissions:
   contents: write
 
 jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Echo runner info
+        run: |
+          echo "Runner OS: $(uname -a)"
+          echo "CI is working"
+
   build-apk:
     runs-on: ubuntu-latest
     steps:
