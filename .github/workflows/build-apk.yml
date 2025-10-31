@@ -67,15 +67,25 @@ jobs:
           EOF
 
           cat > androidapp/build.gradle << 'EOF'
-          plugins {
-            id 'com.android.application' version '8.5.2' apply false
+          buildscript {
+            repositories {
+              google()
+              mavenCentral()
+            }
+            dependencies {
+              classpath 'com.android.tools.build:gradle:8.5.2'
+            }
+          }
+          allprojects {
+            repositories {
+              google()
+              mavenCentral()
+            }
           }
           EOF
 
           cat > androidapp/app/build.gradle << 'EOF'
-          plugins {
-            id 'com.android.application'
-          }
+          apply plugin: 'com.android.application'
 
           android {
             namespace "com.quiz.app"
