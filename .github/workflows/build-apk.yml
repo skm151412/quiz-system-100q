@@ -1,4 +1,4 @@
-name: Build Android APK (WebView)
+name: Build Android APK
 
 on:
   push:
@@ -9,23 +9,10 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: build-apk-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  smoke:
+  build:
     runs-on: ubuntu-latest
-    steps:
-      - name: Print runner info
-        run: |
-          echo "Runner: $(uname -a)"
-          echo "Branch: ${{ github.ref }}"
-          echo "Repo: ${{ github.repository }}"
 
-  build-apk:
-    needs: smoke
-    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,204 +26,48 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK components
-        shell: bash
+      - name: Install Android build tools and platform
         run: |
-          set -euxo pipefail
-          yes | sdkmanager --licenses > /dev/null
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          sdkmanager --install "platforms;android-34" "platform-tools" "build-tools;34.0.0"
 
-      - name: Generate minimal Android project (WebView)
-        shell: bash
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Prepare web assets for Android
         run: |
-          set -euxo pipefail
-          rm -rf androidapp
-          mkdir -p androidapp/app/src/main/java/com/quiz/app
-          mkdir -p androidapp/app/src/main/res/values
-          mkdir -p androidapp/app/src/main/res/xml
-
-          cat > androidapp/settings.gradle << 'EOF'
-          rootProject.name = "quiz-app"
-          include(":app")
-          EOF
-
-          cat > androidapp/gradle.properties << 'EOF'
-          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
-          android.useAndroidX=true
-          android.enableJetifier=true
-          EOF
-
-          cat > androidapp/build.gradle << 'EOF'
-          buildscript {
-            repositories {
-              google()
-              mavenCentral()
-            }
-            dependencies {
-              classpath 'com.android.tools.build:gradle:8.5.2'
-            }
-          }
-          allprojects {
-            repositories {
-              google()
-              mavenCentral()
-            }
-          }
-          EOF
-
-          cat > androidapp/app/build.gradle << 'EOF'
-          apply plugin: 'com.android.application'
-
-          android {
-            namespace "com.quiz.app"
-            compileSdk 34
-
-            defaultConfig {
-              applicationId "com.quiz.app"
-              minSdk 23
-              targetSdk 34
-              versionCode 1
-              versionName "1.0"
-            }
-
-            buildTypes {
-              release {
-                minifyEnabled false
-                proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-              }
-              debug {
-                debuggable true
-              }
-            }
-
-            compileOptions {
-              sourceCompatibility JavaVersion.VERSION_17
-              targetCompatibility JavaVersion.VERSION_17
-            }
-          }
-
-          repositories {
-            google()
-            mavenCentral()
-          }
-
-          dependencies {
-            implementation 'androidx.appcompat:appcompat:1.7.0'
-            implementation 'com.google.android.material:material:1.12.0'
-          }
-          EOF
-
-          # Empty proguard rules file referenced in build.gradle
-          touch androidapp/app/proguard-rules.pro
-
-          cat > androidapp/app/src/main/AndroidManifest.xml << 'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-            <uses-permission android:name="android.permission.INTERNET" />
-
-            <application
-              android:label="Quiz App"
-              android:usesCleartextTraffic="false">
-              <activity
-                android:name=".MainActivity"
-                android:exported="true">
-                <intent-filter>
-                  <action android:name="android.intent.action.MAIN" />
-                  <category android:name="android.intent.category.LAUNCHER" />
-                </intent-filter>
-              </activity>
-            </application>
-          </manifest>
-          EOF
-
-          cat > androidapp/app/src/main/res/values/strings.xml << 'EOF'
-          <resources>
-            <string name="app_name">Quiz App</string>
-          </resources>
-          EOF
-
-          cat > androidapp/app/src/main/java/com/quiz/app/MainActivity.java << 'EOF'
-          package com.quiz.app;
-
-          import android.os.Bundle;
-          import android.webkit.WebSettings;
-          import android.webkit.WebView;
-          import android.webkit.WebViewClient;
-          import androidx.appcompat.app.AppCompatActivity;
-
-          public class MainActivity extends AppCompatActivity {
-              private static final String APP_URL = "https://quiz-app-f2d9e.web.app";
-
-              @Override
-              protected void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-                  WebView webView = new WebView(this);
-                  WebSettings settings = webView.getSettings();
-                  settings.setJavaScriptEnabled(true);
-                  settings.setDomStorageEnabled(true);
-                  webView.setWebViewClient(new WebViewClient());
-                  webView.loadUrl(APP_URL);
-                  setContentView(webView);
-              }
-          }
-          EOF
-
-          # Project scaffolding done
+          mkdir -p android-app/app/src/main/assets/www
+          rsync -av --delete \
+            --exclude='android-app/' \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='apk/' \
+            --exclude='migrations/' \
+            --exclude='scripts/' \
+            ./ android-app/app/src/main/assets/www/
 
       - name: Build debug APK
-        shell: bash
-        working-directory: .
-        env:
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
         run: |
-          set -euxo pipefail
-          # Install Gradle 8.7 locally
-          curl -sSL -o gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
-          unzip -q gradle.zip
-          export GRADLE_HOME="$PWD/gradle-8.7"
-          export PATH="$GRADLE_HOME/bin:$PATH"
-          gradle -v
+          gradle -p android-app assembleDebug --no-daemon
 
-          # Generate proper Gradle wrapper for the project
-          gradle -p androidapp wrapper --gradle-version 8.7 --no-daemon
-          chmod +x androidapp/gradlew
-
-          # Build debug APK
-          pushd androidapp
-          ./gradlew --no-daemon --stacktrace --warning-mode all assembleDebug
-          ls -lah app/build/outputs/apk/debug || true
-          popd
-
-      - name: Collect APK into repo folder
-        shell: bash
+      - name: Copy APK to repo path
         run: |
-          set -euxo pipefail
           mkdir -p apk
-          cp androidapp/app/build/outputs/apk/debug/app-debug.apk apk/quiz-app-debug.apk
-          ls -lah apk
+          cp android-app/app/build/outputs/apk/debug/app-debug.apk apk/quiz-app-debug.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: quiz-app-debug-apk
+          name: quiz-app-debug
           path: apk/quiz-app-debug.apk
 
-      - name: Commit APK back to branch
-        if: ${{ success() }}
-        shell: bash
+      - name: Commit and push APK back to branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euxo pipefail
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add apk/quiz-app-debug.apk
-          git commit -m "ci: add built debug APK"
-          git push origin HEAD:ci/build-apk
-
-      - name: Upload Gradle reports on failure
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: gradle-reports
-          path: |
-            androidapp/app/build/reports
-            androidapp/build/reports
-            androidapp/.gradle
+          git commit -m "CI: Add built APK [skip ci]" || echo "No changes to commit"
+          git push origin HEAD:${{ github.ref_name }}
