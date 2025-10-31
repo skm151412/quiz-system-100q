@@ -36,16 +36,18 @@ jobs:
           gradle-version: 8.7
 
       - name: Prepare web assets for Android
+        shell: bash
         run: |
-          mkdir -p android-app/app/src/main/assets/www
-          rsync -av --delete \
-            --exclude='android-app/' \
-            --exclude='.git/' \
-            --exclude='.github/' \
-            --exclude='apk/' \
-            --exclude='migrations/' \
-            --exclude='scripts/' \
-            ./ android-app/app/src/main/assets/www/
+          set -euxo pipefail
+          dest="android-app/app/src/main/assets/www"
+          mkdir -p "$dest"
+          shopt -s nullglob
+          # Copy common web assets from repo root (flat structure)
+          for f in *.html *.css *.js *.json *.png *.jpg *.jpeg *.svg; do
+            cp -a "$f" "$dest/" || true
+          done
+          # Ensure index.html exists to avoid runtime errors
+          test -f "$dest/index.html"
 
       - name: Build debug APK
         run: |
