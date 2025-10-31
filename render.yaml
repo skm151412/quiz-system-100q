@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: quiz-system-100q
+    env: node
+    plan: free
+    autoDeploy: true
+    buildCommand: npm ci --omit=dev || npm install --production
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+    healthCheckPath: /health
+    # Optional region, uncomment to pin
+    # region: oregon

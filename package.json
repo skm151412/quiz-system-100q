@@ -4,9 +4,14 @@
   "version": "1.0.0",
   "description": "Firebase-only deployment for quiz system with Firestore migration script.",
   "scripts": {
+    "start": "node server.js",
     "migrate": "node migrations/migrate_to_firestore.js"
   },
   "dependencies": {
+    "express": "^4.19.2",
     "firebase-admin": "^12.5.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
