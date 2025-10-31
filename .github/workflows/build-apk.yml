@@ -116,6 +116,9 @@ jobs:
           }
           EOF
 
+          # Empty proguard rules file referenced in build.gradle
+          touch androidapp/app/proguard-rules.pro
+
           cat > androidapp/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <uses-permission android:name="android.permission.INTERNET" />
@@ -167,42 +170,31 @@ jobs:
           }
           EOF
 
-          pushd androidapp
-          # Initialize Gradle wrapper with a compatible version
-          gradle -v || true
-          mkdir -p gradle/wrapper
-          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-bin.zip
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
-          cat > gradlew << 'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          exec bash "$DIR/gradle/wrapper/gradle-wrapper.jar" 2>/dev/null || true
-          EOF
-          chmod +x gradlew || true
-          popd
+          # Project scaffolding done
 
       - name: Build debug APK
         shell: bash
-        working-directory: androidapp
+        working-directory: .
         env:
           ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
         run: |
           set -euxo pipefail
-          # Generate wrapper properly if not present
-          if [ ! -f gradlew ]; then
-            ./gradlew --version || true
-          fi
-          # Use gradle wrapper task to ensure correct wrapper files
-          ./gradlew wrapper --gradle-version 8.7 --no-daemon
-          chmod +x gradlew
+          # Install Gradle 8.7 locally
+          curl -sSL -o gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
+          unzip -q gradle.zip
+          export GRADLE_HOME="$PWD/gradle-8.7"
+          export PATH="$GRADLE_HOME/bin:$PATH"
+          gradle -v
+
+          # Generate proper Gradle wrapper for the project
+          gradle -p androidapp wrapper --gradle-version 8.7 --no-daemon
+          chmod +x androidapp/gradlew
+
+          # Build debug APK
+          pushd androidapp
           ./gradlew --no-daemon --stacktrace --warning-mode all assembleDebug
           ls -lah app/build/outputs/apk/debug || true
+          popd
 
       - name: Collect APK into repo folder
         shell: bash
