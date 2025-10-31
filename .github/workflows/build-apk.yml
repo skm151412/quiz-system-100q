@@ -1,0 +1,79 @@
+name: Build Android APK from PWA
+
+on:
+  push:
+    branches: [ci/build-apk]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          build-tools: '34.0.0'
+
+      - name: Install Cordova
+        run: npm i -g cordova
+
+      - name: Create Cordova project
+        run: |
+          cordova create pwaapk com.quiz.app "QuizApp"
+          cd pwaapk
+          cordova platform add android@13
+          cordova plugin add cordova-plugin-whitelist
+          # Overwrite config.xml to load the external PWA URL
+          cat > config.xml <<'EOF'
+          <?xml version='1.0' encoding='utf-8'?>
+          <widget id="com.quiz.app" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
+            <name>QuizApp</name>
+            <content src="https://quiz-app-f2d9e.web.app" />
+            <access origin="*" />
+            <allow-navigation href="*" />
+            <preference name="AndroidXEnabled" value="true"/>
+            <preference name="AndroidMinSdkVersion" value="23"/>
+            <preference name="AndroidTargetSdkVersion" value="34"/>
+            <platform name="android">
+              <allow-intent href="*" />
+            </platform>
+          </widget>
+          EOF
+
+      - name: Build debug APK
+        run: |
+          cd pwaapk
+          cordova build android --debug
+
+      - name: Copy APK to repo
+        run: |
+          mkdir -p apk
+          cp pwaapk/platforms/android/app/build/outputs/apk/debug/app-debug.apk apk/quiz-app-debug.apk
+
+      - name: Commit APK artifact to branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apk/quiz-app-debug.apk
+          git commit -m "Add built APK artifact [skip ci]" || echo "No changes to commit"
+          git push
