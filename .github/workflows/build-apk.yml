@@ -34,106 +34,110 @@ jobs:
           curl -L -o gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
           unzip -q gradle.zip -d .
 
-      - name: Generate minimal Android project (WebView)
-        run: |
-          mkdir -p androidapp/app/src/main/java/com/quiz/app
-          mkdir -p androidapp/app/src/main/res/values
-          mkdir -p androidapp/app/src/main/res/layout
-          # settings.gradle
-          cat > androidapp/settings.gradle << 'EOF'
-          rootProject.name = 'QuizApp'
-          include ':app'
-          EOF
-          # top-level build.gradle
-          cat > androidapp/build.gradle << 'EOF'
-          buildscript {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:8.5.2'
-              }
+    - name: Generate minimal Android project (WebView)
+    run: |
+      mkdir -p androidapp/app/src/main/java/com/quiz/app
+      mkdir -p androidapp/app/src/main/res/values
+      mkdir -p androidapp/app/src/main/res/layout
+          
+      # settings.gradle
+      cat > androidapp/settings.gradle << 'EOF'
+      rootProject.name = 'QuizApp'
+      include ':app'
+      EOF
+          
+      # top-level build.gradle
+      cat > androidapp/build.gradle << 'EOF'
+      buildscript {
+        repositories {
+          google()
+          mavenCentral()
+        }
+        dependencies {
+          classpath 'com.android.tools.build:gradle:8.5.2'
+        }
+      }
+      allprojects {
+        repositories {
+          google()
+          mavenCentral()
+        }
+      }
+      EOF
+          
+      # gradle.properties
+      cat > androidapp/gradle.properties << 'EOF'
+      org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+      android.useAndroidX=true
+      android.enableJetifier=true
+      EOF
+          
+      # app/build.gradle
+      cat > androidapp/app/build.gradle << 'EOF'
+      apply plugin: 'com.android.application'
+
+      android {
+        namespace 'com.quiz.app'
+        compileSdk 34
+
+        defaultConfig {
+          applicationId 'com.quiz.app'
+          minSdk 23
+          targetSdk 34
+          versionCode 1
+          versionName '1.0'
+        }
+
+        buildTypes {
+          release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
           }
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          EOF
-          # gradle.properties
-          cat > androidapp/gradle.properties << 'EOF'
-          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
-          android.useAndroidX=true
-          android.enableJetifier=true
-          EOF
-          # app/build.gradle
-          cat > androidapp/app/build.gradle << 'EOF'
-          apply plugin: 'com.android.application'
+        }
 
-          android {
-              namespace 'com.quiz.app'
-              compileSdk 34
-
-              defaultConfig {
-                  applicationId 'com.quiz.app'
-                  minSdk 23
-                  targetSdk 34
-                  versionCode 1
-                  versionName '1.0'
-              }
-
-              buildTypes {
-                  release {
-                      minifyEnabled false
-                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-                  }
-              }
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-          }
+        compileOptions {
+          sourceCompatibility JavaVersion.VERSION_17
+          targetCompatibility JavaVersion.VERSION_17
+        }
+      }
 
       dependencies {
         implementation 'androidx.appcompat:appcompat:1.7.0'
         implementation 'com.google.android.material:material:1.12.0'
       }
-          EOF
+      EOF
 
-          # proguard
-          cat > androidapp/app/proguard-rules.pro << 'EOF'
-          # Keep default
-          EOF
+      # proguard
+      cat > androidapp/app/proguard-rules.pro << 'EOF'
+      # Keep default
+      EOF
 
-          # AndroidManifest.xml
-          cat > androidapp/app/src/main/AndroidManifest.xml << 'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.quiz.app">
-              <uses-permission android:name="android.permission.INTERNET" />
-              <application
-                  android:allowBackup="true"
-                  android:label="QuizApp"
-                  android:supportsRtl="true"
-                  android:theme="@style/Theme.QuizApp">
-                  <activity android:name=".MainActivity" android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
+      # AndroidManifest.xml
+      cat > androidapp/app/src/main/AndroidManifest.xml << 'EOF'
+      <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+        package="com.quiz.app">
+        <uses-permission android:name="android.permission.INTERNET" />
+        <application
+          android:allowBackup="true"
+          android:label="QuizApp"
+          android:supportsRtl="true"
+          android:theme="@style/Theme.QuizApp">
+          <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+              <action android:name="android.intent.action.MAIN" />
+              <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+          </activity>
+        </application>
+      </manifest>
+      EOF
 
-          # styles.xml
-          cat > androidapp/app/src/main/res/values/styles.xml << 'EOF'
-          <resources>
-              <style name="Theme.QuizApp" parent="Theme.AppCompat.Light.NoActionBar"/>
-          </resources>
-          EOF
+      # styles.xml
+      cat > androidapp/app/src/main/res/values/styles.xml << 'EOF'
+      <resources>
+        <style name="Theme.QuizApp" parent="Theme.AppCompat.Light.NoActionBar"/>
+      </resources>
+      EOF
 
       # strings.xml
       cat > androidapp/app/src/main/res/values/strings.xml << 'EOF'
@@ -142,31 +146,31 @@ jobs:
       </resources>
       EOF
 
-          # MainActivity.java
-          cat > androidapp/app/src/main/java/com/quiz/app/MainActivity.java << 'EOF'
-          package com.quiz.app;
+      # MainActivity.java
+      cat > androidapp/app/src/main/java/com/quiz/app/MainActivity.java << 'EOF'
+      package com.quiz.app;
 
-          import android.os.Bundle;
-          import android.webkit.WebSettings;
-          import android.webkit.WebView;
-          import android.webkit.WebViewClient;
+      import android.os.Bundle;
+      import android.webkit.WebSettings;
+      import android.webkit.WebView;
+      import android.webkit.WebViewClient;
 
-          import androidx.appcompat.app.AppCompatActivity;
+      import androidx.appcompat.app.AppCompatActivity;
 
-          public class MainActivity extends AppCompatActivity {
-              @Override
-              protected void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-                  WebView webView = new WebView(this);
-                  setContentView(webView);
-                  WebSettings settings = webView.getSettings();
-                  settings.setJavaScriptEnabled(true);
-                  settings.setDomStorageEnabled(true);
-                  webView.setWebViewClient(new WebViewClient());
-                  webView.loadUrl("https://quiz-app-f2d9e.web.app");
-              }
-          }
-          EOF
+      public class MainActivity extends AppCompatActivity {
+        @Override
+        protected void onCreate(Bundle savedInstanceState) {
+          super.onCreate(savedInstanceState);
+          WebView webView = new WebView(this);
+          setContentView(webView);
+          WebSettings settings = webView.getSettings();
+          settings.setJavaScriptEnabled(true);
+          settings.setDomStorageEnabled(true);
+          webView.setWebViewClient(new WebViewClient());
+          webView.loadUrl("https://quiz-app-f2d9e.web.app");
+        }
+      }
+      EOF
 
       - name: Generate Gradle wrapper
         working-directory: androidapp
