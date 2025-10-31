@@ -1,0 +1,22 @@
+name: Deploy to Render (on push to main)
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render Deploy Hook
+        if: ${{ secrets.RENDER_DEPLOY_HOOK != '' }}
+        env:
+          DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          echo "Triggering Render deploy via hook"
+          curl -fsSL -X POST "$DEPLOY_HOOK"
+      - name: Warn if hook not configured
+        if: ${{ secrets.RENDER_DEPLOY_HOOK == '' }}
+        run: |
+          echo "RENDER_DEPLOY_HOOK secret not set. Skipping Render deploy." && exit 0
