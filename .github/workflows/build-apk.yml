@@ -1,4 +1,4 @@
-name: Build Android APK from PWA
+name: Build Android APK from PWA (Native WebView)
 
 on:
   push:
@@ -23,52 +23,154 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
           api-level: 34
           build-tools: '34.0.0'
 
-      - name: Install Cordova
-        run: npm i -g cordova
-
-      - name: Create Cordova project
+      - name: Download Gradle
         run: |
-          cordova create pwaapk com.quiz.app "QuizApp"
-          cd pwaapk
-          cordova platform add android@13
-          cordova plugin add cordova-plugin-whitelist
-          # Overwrite config.xml to load the external PWA URL
-          cat > config.xml <<'EOF'
-          <?xml version='1.0' encoding='utf-8'?>
-          <widget id="com.quiz.app" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
-            <name>QuizApp</name>
-            <content src="https://quiz-app-f2d9e.web.app" />
-            <access origin="*" />
-            <allow-navigation href="*" />
-            <preference name="AndroidXEnabled" value="true"/>
-            <preference name="AndroidMinSdkVersion" value="23"/>
-            <preference name="AndroidTargetSdkVersion" value="34"/>
-            <platform name="android">
-              <allow-intent href="*" />
-            </platform>
-          </widget>
+          curl -L -o gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
+          unzip -q gradle.zip -d .
+
+      - name: Generate minimal Android project (WebView)
+        run: |
+          mkdir -p androidapp/app/src/main/java/com/quiz/app
+          mkdir -p androidapp/app/src/main/res/values
+          # settings.gradle
+          cat > androidapp/settings.gradle << 'EOF'
+          rootProject.name = 'QuizApp'
+          include ':app'
+          EOF
+          # top-level build.gradle
+          cat > androidapp/build.gradle << 'EOF'
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.5.2'
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          EOF
+          # gradle.properties
+          cat > androidapp/gradle.properties << 'EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.enableJetifier=true
+          EOF
+          # app/build.gradle
+          cat > androidapp/app/build.gradle << 'EOF'
+          apply plugin: 'com.android.application'
+
+          android {
+              namespace 'com.quiz.app'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId 'com.quiz.app'
+                  minSdk 23
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.7.0'
+          }
           EOF
 
-      - name: Build debug APK
-        run: |
-          cd pwaapk
-          cordova build android --debug
+          # proguard
+          cat > androidapp/app/proguard-rules.pro << 'EOF'
+          # Keep default
+          EOF
+
+          # AndroidManifest.xml
+          cat > androidapp/app/src/main/AndroidManifest.xml << 'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.quiz.app">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:allowBackup="true"
+                  android:label="QuizApp"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.QuizApp">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          # styles.xml
+          cat > androidapp/app/src/main/res/values/styles.xml << 'EOF'
+          <resources>
+              <style name="Theme.QuizApp" parent="Theme.AppCompat.Light.NoActionBar"/>
+          </resources>
+          EOF
+
+          # MainActivity.java
+          cat > androidapp/app/src/main/java/com/quiz/app/MainActivity.java << 'EOF'
+          package com.quiz.app;
+
+          import android.os.Bundle;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+
+          import androidx.appcompat.app.AppCompatActivity;
+
+          public class MainActivity extends AppCompatActivity {
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  WebView webView = new WebView(this);
+                  setContentView(webView);
+                  WebSettings settings = webView.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  webView.setWebViewClient(new WebViewClient());
+                  webView.loadUrl("https://quiz-app-f2d9e.web.app");
+              }
+          }
+          EOF
+
+      - name: Generate Gradle wrapper
+        working-directory: androidapp
+        run: ../gradle-8.7/bin/gradle wrapper
+
+      - name: Build debug APK (Gradle)
+        working-directory: androidapp
+        run: ./gradlew assembleDebug
 
       - name: Copy APK to repo
         run: |
           mkdir -p apk
-          cp pwaapk/platforms/android/app/build/outputs/apk/debug/app-debug.apk apk/quiz-app-debug.apk
+          cp androidapp/app/build/outputs/apk/debug/app-debug.apk apk/quiz-app-debug.apk
 
       - name: Upload APK as workflow artifact
         if: always()
