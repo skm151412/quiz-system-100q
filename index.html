@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Computer Science Fundamentals Quiz - 100 Questions</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=20251031-1">
     <link rel="manifest" href="manifest.json">
     <style>
         /* Enhanced styles for 100-question quiz system */
@@ -351,19 +351,19 @@
     </audio>
 
         <!-- Initialize Firebase (module) -->
-    <script type="module" src="firebase-init.js?v=20251030-1"></script>
+    <script type="module" src="firebase-init.js?v=20251031-1"></script>
         <!-- Configure app to use Firebase-only mode -->
-        <script src="backend-origin.js?v=20251029-2"></script>
+    <script src="backend-origin.js?v=20251031-1"></script>
         <!-- Firebase API shim (module) -->
-    <script type="module" src="firebase-api.js?v=20251030-1"></script>
+    <script type="module" src="firebase-api.js?v=20251031-1"></script>
         <!-- Auth module for role-based routing (module) -->
-    <script type="module" src="auth.js?v=20251030-1"></script>
+    <script type="module" src="auth.js?v=20251031-1"></script>
         <!-- Main application script -->
-        <script src="script.js?v=20251030-1"></script>
+    <script src="script.js?v=20251031-1"></script>
         <script>
             if ('serviceWorker' in navigator) {
                 window.addEventListener('load', function() {
-                    navigator.serviceWorker.register('service-worker.js');
+                    navigator.serviceWorker.register('service-worker.js?v=20251031-1');
                 });
             }
         </script>
