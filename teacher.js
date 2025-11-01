@@ -1,14 +1,7 @@
 // Teacher dashboard script
 (function(){
-  // Require Firebase Auth; redirect if not authenticated or not teacher
-  const auth = window.firebaseAuth;
+  // Defer using Firebase objects until they're ready to avoid initial flicker
   const db = window.firebaseDb;
-  
-  if (!auth) { 
-    console.error('[Teacher] Firebase Auth not available');
-    location.href = '/index.html'; 
-    return; 
-  }
 
   function setHeaderUser(emailOrName){
     const el = document.getElementById('teacherEmail');
@@ -77,10 +70,23 @@
     }
   });
 
+  // Ensure Firebase API shim is ready before calls
+  function waitForFirebaseApi(timeoutMs = 6000){
+    return new Promise((resolve)=>{
+      if (typeof window.firebaseApiCall === 'function') return resolve();
+      const t = setTimeout(()=>resolve(), timeoutMs);
+      const handler = ()=>{ clearTimeout(t); resolve(); };
+      window.addEventListener('firebaseApiReady', handler, { once: true });
+    });
+  }
+
   async function api(endpoint, options={}) {
     // Always route to Firebase shim; teacher role enforced by rules
     const method = (options && options.method) || 'GET';
     const body = (options && options.body) || null;
+    if (typeof window.firebaseApiCall !== 'function') {
+      await waitForFirebaseApi();
+    }
     return await window.firebaseApiCall(endpoint, method, body);
   }
 
@@ -113,6 +119,16 @@
     });
     // compute percent
     rows.forEach(r=>{r.percent = (r.totalQuestions && r.correctAnswers!=null)? Math.round((r.correctAnswers*100)/r.totalQuestions):0;});
+    // Apply score filter if set
+    try {
+      const scoreFilterVal = document.getElementById('scoreFilter')?.value || 'all';
+      if (scoreFilterVal !== 'all') {
+        const threshold = parseInt(scoreFilterVal, 10);
+        if (!Number.isNaN(threshold)) {
+          rows = rows.filter(r => (r.percent || 0) >= threshold);
+        }
+      }
+    } catch (_) {}
   // attempts count per user (for sorting) – reuse map built later, so build early
   const attemptsPerKey = rows.reduce((m,r)=>{const k=r.userId||r.email||r.username; if(k){m[k]=(m[k]||0)+1;} return m;},{});
   rows.forEach(r=>{ const k=r.userId||r.email||r.username; r._attemptsSort = attemptsPerKey[k]||1; });
@@ -128,7 +144,8 @@
     const tbody = document.querySelector('#attemptTable tbody');
     tbody.innerHTML = rows.map(r=>{
       const key = r.userId||r.email||r.username;
-      const attemptsForUser = attemptCountMap[key] || 1;
+      // Prefer attemptsCount provided by the API (user rollup). Fallback to the computed count from this page's rows, then to 1.
+      const attemptsForUser = (typeof r.attemptsCount === 'number' && r.attemptsCount > 0) ? r.attemptsCount : (attemptCountMap[key] || 1);
       return `<tr>
         <td>${escapeHtml(r.email||r.username||('ID '+r.userId))}</td>
         <td>${escapeHtml(r.fullName||'-')}</td>
@@ -150,10 +167,27 @@
   function escapeHtml(s){return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));}
   function fmtDate(d){ if(!d) return '-'; return new Date(d).toLocaleString(); }
 
-  ['searchStudent','filterQuiz','completionFilter'].forEach(id=>{
-    document.getElementById(id).addEventListener('input',renderAttempts);
-    document.getElementById(id).addEventListener('change',renderAttempts);
+  ['searchStudent','filterQuiz','completionFilter','scoreFilter'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input',renderAttempts);
+    el.addEventListener('change',renderAttempts);
   });
+  // Sort control (separate handler to update currentSort)
+  const sortSel = document.getElementById('sortBy');
+  if (sortSel) {
+    sortSel.addEventListener('change', ()=>{
+      const v = sortSel.value || 'default';
+      if (v === 'score-desc') {
+        currentSort = { field: 'percent', dir: 'desc' };
+      } else if (v === 'score-asc') {
+        currentSort = { field: 'percent', dir: 'asc' };
+      } else {
+        currentSort = { field: 'start', dir: 'desc' };
+      }
+      renderAttempts();
+    });
+  }
 
   document.querySelectorAll('#attemptTable th').forEach(th=>{
     th.addEventListener('click',()=>{
@@ -195,6 +229,14 @@
       correctIndex: parseInt(fd.get('correctIndex') || '0'),
       options: opts
     };
+
+    // Validate subjectId is a number
+    if (!Number.isFinite(payload.subjectId) || payload.subjectId < 1) {
+      const msg = document.getElementById('addQMsg');
+      msg.textContent = '❌ Please select a valid subject for this question';
+      msg.className = 'mini error';
+      return;
+    }
     
     // Validate correct answer is within range of provided options
     if (payload.correctIndex >= opts.length) {

@@ -179,6 +179,13 @@ document.addEventListener("DOMContentLoaded", function () {
         const startButton = document.querySelector('button[onclick="verifyPasswordAndStart()"]');
         
         console.log('Updating flight mode indicator - online status:', connectionStatus.online);
+        // If flight mode requirement is not applicable (e.g., teacher role), hide indicator and skip
+        if (connectionStatus.flightModeRequired === false) {
+            if (indicator) {
+                indicator.style.display = 'none';
+            }
+            return;
+        }
         
         if (indicator) {
             if (connectionStatus.online) {
@@ -204,6 +211,14 @@ document.addEventListener("DOMContentLoaded", function () {
         console.log('Updating start button - online status:', connectionStatus.online);
         
         if (startButton) {
+            // If flight mode is not required (e.g., teacher), always enable normal start label
+            if (connectionStatus.flightModeRequired === false) {
+                startButton.disabled = false;
+                startButton.style.backgroundColor = '';
+                startButton.style.cursor = '';
+                startButton.textContent = 'Start 100-Question Quiz';
+                return;
+            }
             if (connectionStatus.online) {
                 startButton.disabled = true;
                 startButton.style.backgroundColor = '#ccc';
@@ -268,6 +283,11 @@ document.addEventListener("DOMContentLoaded", function () {
     try {
         const cached = JSON.parse(localStorage.getItem('quizCache_v1') || 'null');
         if (cached && cached.questions && cached.subjects && cached.optionsByQid) {
+            // Normalize updatedAt if present
+            if (cached.updatedAt) {
+                const maybeNum = Number(cached.updatedAt);
+                cached.updatedAt = Number.isFinite(maybeNum) ? maybeNum : cached.updatedAt;
+            }
             Object.assign(quizCache, cached, { loaded: true });
             console.log('[offline-cache] Restored quiz cache from localStorage');
         }
@@ -292,11 +312,29 @@ document.addEventListener("DOMContentLoaded", function () {
             quizCache.questions = Array.isArray(questions) ? questions : [];
             quizCache.optionsByQid = optionsByQid;
             quizCache.loaded = true;
+            // Fetch quiz metadata to record updatedAt for cache validation
+            try {
+                const quizzes = await window.firebaseApiCall('/quizzes', 'GET');
+                const meta = (quizzes || []).find(q => String(q.id) === '1' || q.id === 1);
+                if (meta && meta.updatedAt) {
+                    // Try to coerce Firestore timestamp to milliseconds if necessary
+                    let ms = null;
+                    try {
+                        if (typeof meta.updatedAt.toDate === 'function') ms = meta.updatedAt.toDate().getTime();
+                        else if (meta.updatedAt.seconds) ms = meta.updatedAt.seconds * 1000;
+                        else ms = Number(meta.updatedAt) || null;
+                    } catch (_) { ms = Number(meta.updatedAt) || null; }
+                    if (ms) quizCache.updatedAt = ms;
+                }
+            } catch (metaErr) {
+                console.warn('[offline-cache] failed to fetch quiz metadata', metaErr);
+            }
             try {
                 localStorage.setItem('quizCache_v1', JSON.stringify({
                     subjects: quizCache.subjects,
                     questions: quizCache.questions,
-                    optionsByQid: quizCache.optionsByQid
+                    optionsByQid: quizCache.optionsByQid,
+                    updatedAt: quizCache.updatedAt || null
                 }));
             } catch (_) {}
             console.log(`[offline-cache] Prefetched ${quizCache.questions.length} questions`);
@@ -304,6 +342,48 @@ document.addEventListener("DOMContentLoaded", function () {
             console.warn('[offline-cache] Prefetch failed:', e.message || e);
         }
     }
+
+    // Parse server-side timestamp object into milliseconds
+    function parseServerTimestampToMs(ts) {
+        if (!ts) return null;
+        try {
+            if (typeof ts === 'number') return ts;
+            if (typeof ts.toDate === 'function') return ts.toDate().getTime();
+            if (ts.seconds) return Number(ts.seconds) * 1000;
+            const n = Number(ts);
+            return Number.isFinite(n) ? n : null;
+        } catch (_) { return null; }
+    }
+
+    // Check server quiz metadata and invalidate local cache if server has newer data
+    async function checkAndInvalidateCacheIfStale() {
+        if (!quizCache.loaded) return;
+        if (!navigator.onLine) return;
+        try {
+            await waitForFirebaseApi(3000);
+            if (typeof window.firebaseApiCall !== 'function') return;
+            const quizzes = await window.firebaseApiCall('/quizzes', 'GET');
+            const meta = (quizzes || []).find(q => String(q.id) === '1' || q.id === 1);
+            if (!meta) return;
+            const serverMs = parseServerTimestampToMs(meta.updatedAt || meta.updated_at);
+            const localMs = quizCache.updatedAt || null;
+            if (serverMs && (!localMs || serverMs > localMs)) {
+                console.log('[offline-cache] Detected newer quiz on server; invalidating local cache');
+                try { localStorage.removeItem('quizCache_v1'); } catch(_){}
+                quizCache.loaded = false;
+                quizCache.subjects = [];
+                quizCache.questions = [];
+                quizCache.optionsByQid = {};
+                // Trigger prefetch to refresh cache now
+                await prefetchQuizDataIfOnline();
+            }
+        } catch (e) {
+            console.warn('[offline-cache] cache validation failed:', e?.message || e);
+        }
+    }
+
+    // Run cache validation when regaining connectivity
+    window.addEventListener('online', () => { try { checkAndInvalidateCacheIfStale(); } catch(_){} });
 
     // attempt answers buffer for offline mode
     const offlineAttempt = {
@@ -485,52 +565,130 @@ document.addEventListener("DOMContentLoaded", function () {
     // Initialize authentication - show login/signup page first
     async function initializeAuthentication() {
         try {
-            const authModule = window.authModule;
+            const auth = window.firebaseAuth;
+            const authHelpers = window.firebaseAuthHelpers;
 
-            if (!authModule) {
-                console.error('[Quiz] Auth module not loaded, waiting...');
-                // Wait for auth module to load
-                await new Promise((resolve) => {
-                    const checkInterval = setInterval(() => {
-                        if (window.authModule) {
-                            clearInterval(checkInterval);
-                            resolve();
-                        }
-                    }, 100);
-                    // Timeout after 5 seconds
-                    setTimeout(() => {
-                        clearInterval(checkInterval);
-                        resolve();
-                    }, 5000);
-                });
-            }
-
-            if (!window.authModule) {
-                console.error('[Quiz] Auth module failed to load');
+            if (!auth || !authHelpers) {
+                console.error('Firebase Auth not initialized');
                 alert('Authentication system not available. Please refresh the page.');
                 return;
             }
 
-            // Use auth module to handle authentication and role-based routing
-            authModule.handleAuthStateChange(
-                async (user, role) => {
-                    // User is authenticated and authorized for this page (student)
-                    console.log('[Quiz] User authenticated:', user.email, 'Role:', role);
-                    currentUserEmail = user.email;
-                    currentUserId = user.uid;
-                    currentUserRole = role;
-                    
-                    hideLoginPage();
-                    await initializeQuiz();
-                },
-                () => {
+            // Helper: save user profile reliably (shim first, Firestore fallback)
+            async function saveUserProfileReliable(payload) {
+                try {
+                    await waitForFirebaseApi(2000);
+                    if (typeof window.firebaseApiCall === 'function') {
+                        await window.firebaseApiCall('/users/identify', 'POST', payload);
+                        return true;
+                    }
+                    throw new Error('firebaseApiCall not ready');
+                } catch (e) {
+                    try {
+                        const db = window.firebaseDb;
+                        const { setDoc, doc, serverTimestamp } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+                        const uid = window.firebaseAuth?.currentUser?.uid;
+                        if (!uid) throw new Error('No auth uid for profile save');
+                        await setDoc(doc(db, 'users', String(uid)), { ...payload, updatedAt: serverTimestamp() }, { merge: true });
+                        return true;
+                    } catch (inner) {
+                        console.error('Profile save fallback failed:', inner);
+                        return false;
+                    }
+                }
+            }
+
+            // Check if user is already authenticated
+            authHelpers.onAuthStateChanged((user) => {
+                if (user) {
+                    (async () => {
+                        console.log('User authenticated:', user.email);
+                        currentUserEmail = user.email;
+                        currentUserId = user.uid;
+
+                        // Try to resolve role from Firestore profile; default to student
+                        currentUserRole = 'student';
+                        let profileExists = false;
+                        try {
+                            const db = window.firebaseDb;
+                            const { getDoc, doc } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+                            const snap = await getDoc(doc(db, 'users', String(user.uid)));
+                            if (snap.exists()) {
+                                const role = snap.data().role || 'student';
+                                currentUserRole = role;
+                                profileExists = true;
+                            } else {
+                                console.warn('No Firestore profile found for user, creating default...');
+                                // Create minimal profile for users without one (legacy users)
+                                const ok = await saveUserProfileReliable({
+                                    username: (user.email || '').split('@')[0],
+                                    email: user.email,
+                                    fullName: user.displayName || user.email,
+                                    role: 'student'
+                                });
+                                if (ok) console.log('Created default profile for existing user');
+                            }
+                        } catch (e) {
+                            console.warn('Role lookup failed, defaulting to student:', e?.message || e);
+                        }
+
+                        // Set flight-mode requirement based on role
+                        connectionStatus.flightModeRequired = (currentUserRole === 'student');
+
+                        // Handle pending teacher upgrade if requested during sign-in
+                        try {
+                            const pending = localStorage.getItem('pending_teacher_upgrade');
+                            if (pending === '1') {
+                                console.log('Applying pending teacher upgrade...');
+                                try {
+                                    await waitForFirebaseApi(2000);
+                                    if (typeof window.firebaseApiCall === 'function') {
+                                        await window.firebaseApiCall('/users/identify', 'POST', { role: 'teacher' });
+                                    } else {
+                                        // Fallback direct Firestore update
+                                        const db = window.firebaseDb;
+                                        const { setDoc, doc, serverTimestamp } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+                                        await setDoc(doc(db, 'users', String(user.uid)), { role: 'teacher', updatedAt: serverTimestamp() }, { merge: true });
+                                    }
+                                    currentUserRole = 'teacher';
+                                    console.log('Teacher role applied successfully');
+                                } catch (uErr) {
+                                    console.error('Failed to apply teacher upgrade:', uErr);
+                                } finally {
+                                    try { localStorage.removeItem('pending_teacher_upgrade'); } catch(_) {}
+                                }
+                            }
+                        } catch(_) {}
+
+                        // If teacher, send to new teacher dashboard with fallback to legacy page
+                        if (currentUserRole === 'teacher') {
+                            try {
+                                const controller = new AbortController();
+                                const t = setTimeout(()=>controller.abort(), 1500);
+                                const res = await fetch('teacher2.html', { method:'HEAD', cache:'no-store', signal: controller.signal });
+                                clearTimeout(t);
+                                if (res && (res.ok || res.status === 0)) {
+                                    window.location.href = 'teacher2.html';
+                                    return;
+                                }
+                            } catch (_) { /* ignore */ }
+                            // Fallback if teacher2.html not yet deployed
+                            window.location.href = 'teacher.html';
+                            return;
+                        }
+
+                        // Otherwise continue to student quiz
+                        hideLoginPage();
+                        initializeQuiz();
+                    })();
+                } else {
                     // No user signed in, show login page
-                    console.log('[Quiz] No user authenticated, showing login page');
+                    console.log('No user authenticated, showing login page');
                     showLoginPage();
                 }
-            );
+            });
         } catch (error) {
-            console.error('[Quiz] Authentication initialization error:', error);
+            console.error('Authentication initialization error:', error);
             alert('Failed to initialize authentication. Please refresh the page.');
         }
     }
@@ -540,139 +698,126 @@ document.addEventListener("DOMContentLoaded", function () {
         const loginDiv = document.createElement('div');
         loginDiv.id = 'auth-page';
         loginDiv.innerHTML = `
-            <div class="auth-container">
-                <div class="auth-card">
-                    <div class="auth-header">
-                        <div class="auth-logo">
-                            <div class="logo-icon">📚</div>
-                        </div>
-                        <h2 class="auth-title">Welcome back</h2>
-                        <p class="auth-subtitle">Please enter your details to sign in</p>
-                    </div>
-
-                    <!-- Tab buttons for Sign In / Sign Up -->
-                    <div class="auth-tabs">
-                        <button class="auth-tab active" data-tab="signin">Student</button>
-                        <button class="auth-tab" data-tab="signup">Teacher</button>
-                    </div>
-
-                    <!-- Sign In Form -->
-                    <div class="auth-form" id="signin-form">
-                        <!-- Social Login Buttons -->
-                        <div class="social-login">
-                            <button class="social-btn google-btn" id="google-signin-btn">
-                                <svg width="18" height="18" viewBox="0 0 18 18">
-                                    <path fill="#4285F4" d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 0 0 2.38-5.88c0-.57-.05-.66-.15-1.18z"/>
-                                    <path fill="#34A853" d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2a4.8 4.8 0 0 1-7.18-2.54H1.83v2.07A8 8 0 0 0 8.98 17z"/>
-                                    <path fill="#FBBC05" d="M4.5 10.52a4.8 4.8 0 0 1 0-3.04V5.41H1.83a8 8 0 0 0 0 7.18l2.67-2.07z"/>
-                                    <path fill="#EA4335" d="M8.98 4.18c1.17 0 2.23.4 3.06 1.2l2.3-2.3A8 8 0 0 0 1.83 5.4L4.5 7.49a4.77 4.77 0 0 1 4.48-3.3z"/>
-                                </svg>
-                                Continue with Google
-                            </button>
-                        </div>
-
-                        <div class="auth-divider">
-                            <span>OR</span>
-                        </div>
-
-                        <!-- Email/Password Sign In -->
-                        <div class="form-group">
-                            <label for="signin-email">Your Email Address</label>
-                            <input type="email" id="signin-email" placeholder="Your Email Address" required>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="signin-password">Password</label>
-                            <div class="password-input-wrapper">
-                                <input type="password" id="signin-password" placeholder="••••••••••" required>
-                                <button type="button" class="password-toggle" data-target="signin-password">
-                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                                        <circle cx="12" cy="12" r="3"></circle>
-                                    </svg>
-                                </button>
+            <div class="auth-split">
+                <!-- Left visual section with provided image as background -->
+                <div class="auth-visual-side" aria-hidden="true">
+                    <div class="auth-visual-badge">QUIZ SYSTEM</div>
+                </div>
+                <!-- Right form section -->
+                <div class="auth-form-side">
+                  <div class="auth-container">
+                    <div class="auth-card">
+                        <div class="auth-header">
+                            <div class="auth-logo">
+                                <img src="logo.png" alt="Logo" class="auth-logo-img" onerror="this.style.display='none'">
+                                <div class="logo-icon" style="display:none">📚</div>
                             </div>
+                            <h2 class="auth-title">Welcome back</h2>
+                            <p class="auth-subtitle">Please enter your details to sign in</p>
                         </div>
 
-                        <div class="form-options">
-                            <label class="remember-me">
-                                <input type="checkbox" id="remember-me">
-                                <span>Remember me</span>
-                            </label>
-                            <a href="#" class="forgot-password">Forgot Password?</a>
+                        <!-- Tab buttons for Sign In / Sign Up -->
+                        <div class="auth-tabs">
+                            <button class="auth-tab active" data-tab="signin">Student</button>
+                            <button class="auth-tab" data-tab="signup">Teacher</button>
                         </div>
 
-                        <button class="auth-submit-btn" id="signin-btn">LOGIN</button>
+                        <!-- Sign In Form -->
+                        <div class="auth-form" id="signin-form">
 
-                        <div class="auth-footer">
-                            Don't have an account? <a href="#" class="auth-switch" data-switch="signup">Sign up</a>
-                        </div>
-
-                        <div id="signin-error" class="auth-error" style="display: none;"></div>
-                    </div>
-
-                    <!-- Sign Up Form -->
-                    <div class="auth-form" id="signup-form" style="display: none;">
-                        <!-- Social Login Buttons -->
-                        <div class="social-login">
-                            <button class="social-btn google-btn" id="google-signup-btn">
-                                <svg width="18" height="18" viewBox="0 0 18 18">
-                                    <path fill="#4285F4" d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 0 0 2.38-5.88c0-.57-.05-.66-.15-1.18z"/>
-                                    <path fill="#34A853" d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2a4.8 4.8 0 0 1-7.18-2.54H1.83v2.07A8 8 0 0 0 8.98 17z"/>
-                                    <path fill="#FBBC05" d="M4.5 10.52a4.8 4.8 0 0 1 0-3.04V5.41H1.83a8 8 0 0 0 0 7.18l2.67-2.07z"/>
-                                    <path fill="#EA4335" d="M8.98 4.18c1.17 0 2.23.4 3.06 1.2l2.3-2.3A8 8 0 0 0 1.83 5.4L4.5 7.49a4.77 4.77 0 0 1 4.48-3.3z"/>
-                                </svg>
-                                Continue with Google
-                            </button>
-                        </div>
-
-                        <div class="auth-divider">
-                            <span>OR</span>
-                        </div>
-
-                        <!-- Email/Password Sign Up -->
-                        <div class="form-group">
-                            <label for="signup-email">Your Email Address</label>
-                            <input type="email" id="signup-email" placeholder="Your Email Address" required>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="signup-password">Password</label>
-                            <div class="password-input-wrapper">
-                                <input type="password" id="signup-password" placeholder="••••••••••" required>
-                                <button type="button" class="password-toggle" data-target="signup-password">
-                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                                        <circle cx="12" cy="12" r="3"></circle>
-                                    </svg>
-                                </button>
+                            <!-- Email/Password Sign In -->
+                            <div class="form-group">
+                                <label for="signin-email">Your Email Address</label>
+                                <input type="email" id="signin-email" placeholder="Your Email Address" required>
                             </div>
+
+                            <div class="form-group">
+                                <label for="signin-password">Password</label>
+                                <div class="password-input-wrapper">
+                                    <input type="password" id="signin-password" placeholder="••••••••••" required>
+                                    <button type="button" class="password-toggle" data-target="signin-password">
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                            <circle cx="12" cy="12" r="3"></circle>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Optional Teacher Upgrade during Sign In -->
+                            <div class="form-group">
+                                <label for="signin-teacher-password">Teacher Password (optional)</label>
+                                <input type="password" id="signin-teacher-password" placeholder="Enter teacher password to upgrade this account">
+                            </div>
+
+                            <!-- Removed Remember me and Forgot Password per requirements -->
+
+                            <button class="auth-submit-btn" id="signin-btn">LOGIN</button>
+
+                            <div class="auth-footer">
+                                Don't have an account? <a href="#" class="auth-switch" data-switch="signup">Sign up</a>
+                            </div>
+
+                            <div id="signin-error" class="auth-error" style="display: none;"></div>
                         </div>
 
-                        <button class="auth-submit-btn" id="signup-btn">Sign in</button>
+                        <!-- Sign Up Form -->
+                        <div class="auth-form" id="signup-form" style="display: none;">
 
-                        <div class="auth-footer">
-                            Don't have an account? <a href="#" class="auth-switch" data-switch="signin">Sign up</a>
+                            <!-- Email/Password Sign Up -->
+                            <div class="form-group">
+                                <label for="signup-fullname">Full Name</label>
+                                <input type="text" id="signup-fullname" placeholder="Your full name" required>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="signup-email">Your Email Address</label>
+                                <input type="email" id="signup-email" placeholder="Your Email Address" required>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="signup-password">Password</label>
+                                <div class="password-input-wrapper">
+                                    <input type="password" id="signup-password" placeholder="••••••••••" required>
+                                    <button type="button" class="password-toggle" data-target="signup-password">
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                            <circle cx="12" cy="12" r="3"></circle>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="signup-teacher-password">Teacher Password (optional - leave blank for student)</label>
+                                <input type="password" id="signup-teacher-password" placeholder="Enter teacher password">
+                            </div>
+
+                            <button class="auth-submit-btn" id="signup-btn">CREATE ACCOUNT</button>
+
+                            <div class="auth-footer">
+                                Already have an account? <a href="#" class="auth-switch" data-switch="signin">Sign in</a>
+                            </div>
+
+                            <div id="signup-error" class="auth-error" style="display: none;"></div>
                         </div>
-
-                        <div id="signup-error" class="auth-error" style="display: none;"></div>
                     </div>
+                  </div>
                 </div>
             </div>
         `;
 
         loginDiv.style.cssText = `
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            inset: 0;
+            background: radial-gradient(60% 60% at 30% 20%, rgba(0, 242, 255, 0.08), transparent 60%),
+                        linear-gradient(135deg, #07111e 0%, #0b1b2d 100%);
             display: flex;
-            justify-content: center;
+            justify-content: flex-end; /* push panel to the right edge */
             align-items: center;
             z-index: 2000;
             overflow-y: auto;
+            padding: 0; /* full-bleed layout for 75/25 split */
         `;
 
         document.body.appendChild(loginDiv);
@@ -735,10 +880,18 @@ document.addEventListener("DOMContentLoaded", function () {
         document.getElementById('signin-btn').addEventListener('click', async function() {
             const email = document.getElementById('signin-email').value.trim();
             const password = document.getElementById('signin-password').value;
+            const teacherPassword = (document.getElementById('signin-teacher-password')?.value || '').trim();
             const errorDiv = document.getElementById('signin-error');
 
             if (!email || !password) {
                 errorDiv.textContent = 'Please enter both email and password';
+                errorDiv.style.display = 'block';
+                return;
+            }
+
+            // If a teacher password was provided but is incorrect, block sign-in to avoid confusion
+            if (teacherPassword && teacherPassword !== 'teacher123') {
+                errorDiv.textContent = 'Invalid teacher password';
                 errorDiv.style.display = 'block';
                 return;
             }
@@ -748,6 +901,11 @@ document.addEventListener("DOMContentLoaded", function () {
                 this.textContent = 'Signing in...';
                 errorDiv.style.display = 'none';
 
+                // Mark a pending teacher upgrade if a valid teacher password was given
+                if (teacherPassword === 'teacher123') {
+                    try { localStorage.setItem('pending_teacher_upgrade', '1'); } catch(_) {}
+                }
+
                 await authHelpers.signInWithEmailAndPassword(email, password);
                 // Auth state change will handle the rest
             } catch (error) {
@@ -756,14 +914,23 @@ document.addEventListener("DOMContentLoaded", function () {
                 errorDiv.style.display = 'block';
                 this.disabled = false;
                 this.textContent = 'LOGIN';
+                try { localStorage.removeItem('pending_teacher_upgrade'); } catch(_) {}
             }
         });
 
         // Sign Up
         document.getElementById('signup-btn').addEventListener('click', async function() {
+            const fullname = document.getElementById('signup-fullname').value.trim();
             const email = document.getElementById('signup-email').value.trim();
             const password = document.getElementById('signup-password').value;
+            const teacherPassword = document.getElementById('signup-teacher-password').value;
             const errorDiv = document.getElementById('signup-error');
+
+            if (!fullname) {
+                errorDiv.textContent = 'Please enter your full name';
+                errorDiv.style.display = 'block';
+                return;
+            }
 
             if (!email || !password) {
                 errorDiv.textContent = 'Please enter both email and password';
@@ -777,65 +944,82 @@ document.addEventListener("DOMContentLoaded", function () {
                 return;
             }
 
+            // Determine role: if teacher password provided and correct, role = teacher
+            let role = 'student';
+            if (teacherPassword) {
+                if (teacherPassword === 'teacher123') {
+                    role = 'teacher';
+                } else {
+                    errorDiv.textContent = 'Invalid teacher password';
+                    errorDiv.style.display = 'block';
+                    return;
+                }
+            }
+
             try {
                 this.disabled = true;
                 this.textContent = 'Creating account...';
                 errorDiv.style.display = 'none';
 
-                // Determine role based on active tab
-                const activeTab = document.querySelector('.auth-tab.active');
-                const selectedRole = activeTab && activeTab.textContent.toLowerCase().includes('teacher') ? 'teacher' : 'student';
-                console.log('[Signup] Creating account with role:', selectedRole);
-
-                // Create user account
+                // Create auth user
                 const userCredential = await authHelpers.createUserWithEmailAndPassword(email, password);
                 const user = userCredential.user;
 
-                // Set role in Firestore immediately after account creation
-                if (window.authModule && user) {
-                    await window.authModule.updateUserRole(user.uid, selectedRole);
-                    console.log('[Signup] Role set successfully:', selectedRole);
-                }
+                // Prepare user profile payload to persist in Firestore
+                const username = (fullname.split(' ')[0] || email.split('@')[0]).toLowerCase().replace(/[^a-z0-9_\-]/g, '_');
+                const payload = { username, fullName: fullname, email, role };
 
-                // Auth state change will handle the rest (redirect based on role)
+                // Set local vars immediately
+                currentUserFullName = fullname;
+                currentUserRole = role;
+                currentUserId = user.uid;
+                currentUserEmail = email;
+
+                // CRITICAL: Save user profile to Firestore immediately and wait for completion
+                const saved = await (async () => {
+                    try {
+                        await waitForFirebaseApi(2000);
+                        if (typeof window.firebaseApiCall === 'function') {
+                            await window.firebaseApiCall('/users/identify', 'POST', payload);
+                            console.log('User profile saved to Firestore via API shim');
+                            return true;
+                        }
+                        throw new Error('firebaseApiCall not ready');
+                    } catch (e) {
+                        console.warn('API shim not ready, using Firestore fallback:', e?.message || e);
+                        try {
+                            const db = window.firebaseDb;
+                            const { setDoc, doc, serverTimestamp } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+                            await setDoc(doc(db, 'users', String(user.uid)), { ...payload, updatedAt: serverTimestamp() }, { merge: true });
+                            return true;
+                        } catch (inner) {
+                            console.error('Firestore fallback failed:', inner);
+                            offlineUserPayload = payload;
+                            persistOfflineUserPayload();
+                            // Best-effort: try to flush immediately once online/API ready
+                            try { await flushOfflineToFirestore(); } catch(_) {}
+                            return false;
+                        }
+                    }
+                })();
+
+                // After profile is saved, redirect based on role
+                if (role === 'teacher') {
+                    window.location.href = 'teacher2.html';
+                } else {
+                    hideLoginPage();
+                    initializeQuiz();
+                }
             } catch (error) {
                 console.error('Sign up error:', error);
                 errorDiv.textContent = getAuthErrorMessage(error);
                 errorDiv.style.display = 'block';
                 this.disabled = false;
-                this.textContent = 'Sign in';
+                this.textContent = 'CREATE ACCOUNT';
             }
         });
 
-        // Google Sign In (both buttons)
-        const setupGoogleSignIn = (btnId) => {
-            document.getElementById(btnId).addEventListener('click', async function() {
-                const errorDiv = btnId.includes('signin') ? 
-                    document.getElementById('signin-error') : 
-                    document.getElementById('signup-error');
-
-                try {
-                    this.disabled = true;
-                    errorDiv.style.display = 'none';
-
-                    // Import GoogleAuthProvider
-                    const { GoogleAuthProvider, signInWithPopup } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js');
-                    const provider = new GoogleAuthProvider();
-                    const auth = window.firebaseAuth;
-
-                    await signInWithPopup(auth, provider);
-                    // Auth state change will handle the rest
-                } catch (error) {
-                    console.error('Google sign in error:', error);
-                    errorDiv.textContent = getAuthErrorMessage(error);
-                    errorDiv.style.display = 'block';
-                    this.disabled = false;
-                }
-            });
-        };
-
-        setupGoogleSignIn('google-signin-btn');
-        setupGoogleSignIn('google-signup-btn');
+        // Removed Google Sign-In buttons and handlers
 
         // Enter key support
         ['signin-email', 'signin-password'].forEach(id => {
@@ -846,7 +1030,7 @@ document.addEventListener("DOMContentLoaded", function () {
             });
         });
 
-        ['signup-email', 'signup-password'].forEach(id => {
+        ['signup-fullname','signup-email', 'signup-password', 'signup-teacher-password'].forEach(id => {
             document.getElementById(id).addEventListener('keypress', function(e) {
                 if (e.key === 'Enter') {
                     document.getElementById('signup-btn').click();
@@ -903,19 +1087,11 @@ document.addEventListener("DOMContentLoaded", function () {
             <div class="prerequisite-content">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                     <h2 style="margin: 0;">Computer Science Fundamentals Quiz</h2>
-                    <button onclick="handleLogout()" style="padding: 8px 16px; background: #e74c3c; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600;">
+                    <button onclick="handleLogout()" class="btn btn-danger btn-sm">
                         🚪 Logout
                     </button>
                 </div>
-                <div class="quiz-details">
-                    <p><strong>100 Questions</strong> covering 4 major subjects:</p>
-                    <ul style="list-style: none; padding: 0;">
-                        <li>🗄️ <strong>DBMS</strong>: Questions 1-25 (Database Management Systems)</li>
-                        <li>🌐 <strong>FEDF</strong>: Questions 26-50 (Front-End Development Frameworks)</li>
-                        <li>⚙️ <strong>OOP</strong>: Questions 51-75 (Object-Oriented Programming)</li>
-                        <li>💻 <strong>OS</strong>: Questions 76-100 (Operating Systems)</li>
-                    </ul>
-                </div>
+                <!-- quiz-details removed for compact overlay -->
                 
                 <!-- Flight Mode Status Indicator -->
                 <div id="flight-mode-indicator" class="flight-mode-indicator">
@@ -923,7 +1099,7 @@ document.addEventListener("DOMContentLoaded", function () {
                     <div id="connection-status" class="connection-status">
                         🌐 Checking internet connection...
                     </div>
-                    <button type="button" onclick="forceConnectionCheck()" style="margin-left: 10px; padding: 5px 10px; border: none; border-radius: 5px; background: #3498db; color: white; cursor: pointer; font-size: 12px;">
+                    <button type="button" onclick="forceConnectionCheck()" class="btn btn-info btn-xs recheck-btn">
                         🔄 Recheck
                     </button>
                 </div>
@@ -932,10 +1108,6 @@ document.addEventListener("DOMContentLoaded", function () {
                     <p><strong>Before starting, please ensure:</strong></p>
                     <ul>
                         <li><strong>❗ Turn OFF internet connection (Enable flight mode)</strong></li>
-                        <li>Close all other browser tabs and applications</li>
-                        <li>Ensure you have a stable power source</li>
-                        <li>Find a quiet environment for concentration</li>
-                        <li>Allocate 90 minutes for completion</li>
                     </ul>
                     <p style="color: #ff4757; font-weight: bold; margin-top: 15px;">
                         ⚠️ Quiz cannot be started while internet is connected
@@ -961,6 +1133,8 @@ document.addEventListener("DOMContentLoaded", function () {
             align-items: center;
             z-index: 1000;
             overflow-y: auto;
+            padding: 16px;
+            box-sizing: border-box;
         `;
 
         document.body.appendChild(prerequisiteDiv);
@@ -1053,6 +1227,23 @@ document.addEventListener("DOMContentLoaded", function () {
             console.log('connectionStatus.online:', connectionStatus.online);
             console.log('connectionStatus.lastChecked:', connectionStatus.lastChecked);
             console.log('navigator.onLine:', navigator.onLine);
+            
+            // If flight mode is not required (e.g., teacher), skip connection checks
+            if (connectionStatus.flightModeRequired === false) {
+                const password = document.getElementById('quiz-password').value;
+                const errorDiv = document.getElementById('password-error');
+
+                if (password !== quizPassword) {
+                    errorDiv.textContent = 'Invalid password';
+                    errorDiv.style.display = 'block';
+                    return;
+                }
+
+                const prerequisiteDiv = document.querySelector('.prerequisite');
+                if (prerequisiteDiv) prerequisiteDiv.remove();
+                loadQuizData();
+                return;
+            }
             
             // Run a quick connection check first
             await new Promise(resolve => {
@@ -1430,6 +1621,8 @@ document.addEventListener("DOMContentLoaded", function () {
                     if (autoSubmitSecondsRemaining <= 0) {
                         clearInterval(autoSubmitCountdownTimer);
                         autoSubmitCountdownTimer = null;
+                        // Promote attempt first to avoid 'Attempt not found' when quiz started offline
+                        (async () => { try { await flushOfflineToFirestore(); } catch(_){} })();
                         submitQuiz(false);
                     }
                 }, 1000);
@@ -1441,6 +1634,8 @@ document.addEventListener("DOMContentLoaded", function () {
                     const reachable = await isInternetReachable(2000);
                     if (reachable) {
                         console.log('Internet detected during quiz! Initiating countdown...');
+                        // Start syncing in the background so submit can succeed later
+                        try { await flushOfflineToFirestore(); } catch(_){}
                         initiateCountdown();
                     } else {
                         console.log('Online event fired, but external check failed – staying in offline mode');
@@ -1457,6 +1652,7 @@ document.addEventListener("DOMContentLoaded", function () {
                     const reachable = await isInternetReachable(2000);
                     if (reachable) {
                         console.log('Periodic check: Internet detected during quiz!');
+                        try { await flushOfflineToFirestore(); } catch(_){}
                         initiateCountdown();
                     }
                 }
@@ -1669,7 +1865,44 @@ document.addEventListener("DOMContentLoaded", function () {
             }
             const warningOverlay = document.getElementById('auto-submit-warning');
             if (warningOverlay) warningOverlay.remove();
-            const result = await apiCall(`/quiz/attempts/${attemptId}/complete`, 'POST');
+            // If we started offline, ensure the local attempt is promoted to a remote attempt before completion
+            let effectiveAttemptId = attemptId;
+            const isLocalId = effectiveAttemptId && String(effectiveAttemptId).startsWith('local-');
+            if (navigator.onLine && isLocalId) {
+                try {
+                    await flushOfflineToFirestore();
+                    if (offlineAttempt.remoteAttemptId) {
+                        effectiveAttemptId = offlineAttempt.remoteAttemptId;
+                    }
+                } catch (_) { /* non-fatal; we'll fall back below */ }
+            }
+
+            let result = null;
+            try {
+                result = await apiCall(`/quiz/attempts/${effectiveAttemptId}/complete`, 'POST');
+            } catch (e) {
+                // Fallback: if we are online but the remote attempt doesn't exist yet,
+                // compute locally from cache to avoid student-facing failure.
+                if (navigator.onLine && isLocalId) {
+                    try {
+                        // Temporarily pretend offline to reuse local compute branch
+                        const prevOnLine = navigator.onLine;
+                        // We cannot modify navigator.onLine; instead compute manually from cache
+                        if (!quizCache.loaded) throw e;
+                        let correct = 0;
+                        const total = quizCache.questions.length;
+                        for (const q of quizCache.questions) {
+                            const sel = offlineAttempt.answers[String(q.id)];
+                            const opts = quizCache.optionsByQid[String(q.id)] || [];
+                            const chosen = opts.find(o => String(o.id) === String(sel));
+                            if (chosen && (chosen.isCorrect === true || chosen.is_correct === true)) correct++;
+                        }
+                        result = { correctAnswers: correct, totalQuestions: total, score: Math.round((correct * 100) / (total || 1)) };
+                    } catch (_) { throw e; }
+                } else {
+                    throw e;
+                }
+            }
             if (!navigator.onLine) {
                 offlineAttempt.completed = true;
                 offlineAttempt.result = result;

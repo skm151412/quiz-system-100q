@@ -22,6 +22,70 @@ import {
 const db = window.firebaseDb || getFirestore(window.firebaseApp);
 const auth = window.firebaseAuth;
 
+// Minimal fallback dataset so the quiz works even if Firestore is empty
+// Note: read-only in-memory; does not write to Firestore. Intended as a fast safety net.
+const DEFAULT_QUIZ = {
+  quizId: 1,
+  subjects: [
+    { id: 1, name: 'DBMS', color: '#000000' },
+    { id: 2, name: 'FEDF', color: '#FF6B6B' },
+    { id: 3, name: 'OOP', color: '#4ECDC4' },
+    { id: 4, name: 'OS',  color: '#45B7D1' }
+  ],
+  questions: [
+    {
+      id: 1, subjectId: 1, orderNum: 1,
+      questionText: 'Which SQL command is used to remove a table and its data permanently?',
+      options: [
+        { id: 0, optionText: 'DELETE TABLE', isCorrect: false },
+        { id: 1, optionText: 'DROP TABLE',   isCorrect: true  },
+        { id: 2, optionText: 'TRUNCATE ROW', isCorrect: false },
+        { id: 3, optionText: 'REMOVE TABLE', isCorrect: false }
+      ]
+    },
+    {
+      id: 2, subjectId: 2, orderNum: 2,
+      questionText: 'Which HTML tag is semantic and represents independent content?',
+      options: [
+        { id: 0, optionText: '<div>',   isCorrect: false },
+        { id: 1, optionText: '<section>', isCorrect: true  },
+        { id: 2, optionText: '<span>',  isCorrect: false },
+        { id: 3, optionText: '<b>',     isCorrect: false }
+      ]
+    },
+    {
+      id: 3, subjectId: 3, orderNum: 3,
+      questionText: 'Which OOP concept allows using the same function name with different implementations?',
+      options: [
+        { id: 0, optionText: 'Encapsulation', isCorrect: false },
+        { id: 1, optionText: 'Inheritance',   isCorrect: false },
+        { id: 2, optionText: 'Polymorphism',  isCorrect: true  },
+        { id: 3, optionText: 'Abstraction',   isCorrect: false }
+      ]
+    },
+    {
+      id: 4, subjectId: 4, orderNum: 4,
+      questionText: 'Which scheduling algorithm picks the process with the shortest next CPU burst?',
+      options: [
+        { id: 0, optionText: 'FCFS',  isCorrect: false },
+        { id: 1, optionText: 'SJF',   isCorrect: true  },
+        { id: 2, optionText: 'RR',    isCorrect: false },
+        { id: 3, optionText: 'EDF',   isCorrect: false }
+      ]
+    },
+    {
+      id: 5, subjectId: 1, orderNum: 5,
+      questionText: 'Which normal form removes partial dependency on a candidate key?',
+      options: [
+        { id: 0, optionText: '1NF', isCorrect: false },
+        { id: 1, optionText: '2NF', isCorrect: true  },
+        { id: 2, optionText: '3NF', isCorrect: false },
+        { id: 3, optionText: 'BCNF', isCorrect: false }
+      ]
+    }
+  ]
+};
+
 function requireAuth() {
   if (!auth || !auth.currentUser) {
     throw new Error('Not authenticated');
@@ -68,14 +132,31 @@ async function getQuizQuestions(quizId) {
   await ensureQuiz(quizId);
   const qRef = collection(db, 'quizzes', String(quizId), 'questions');
   const qSnap = await getDocs(query(qRef, orderBy('orderNum')));
-  return qSnap.docs.map(d => ({ id: parseInt(d.id,10)||d.id, ...d.data() }));
+  const items = qSnap.docs.map(d => ({ id: parseInt(d.id,10)||d.id, ...d.data() }));
+  if (items.length === 0 && quizId === DEFAULT_QUIZ.quizId) {
+    // Fallback to built-in questions (read-only)
+    return DEFAULT_QUIZ.questions.map(q => ({
+      id: q.id,
+      subjectId: q.subjectId,
+      orderNum: q.orderNum,
+      questionText: q.questionText
+    }));
+  }
+  return items;
 }
 
 // Fetch options for a question
 async function getQuestionOptions(quizId, questionId) {
   const oRef = collection(db, 'quizzes', String(quizId), 'questions', String(questionId), 'options');
   const oSnap = await getDocs(query(oRef, orderBy('index')));
-  return oSnap.docs.map(d => ({ id: parseInt(d.id,10)||d.id, ...d.data() }));
+  const items = oSnap.docs.map(d => ({ id: parseInt(d.id,10)||d.id, ...d.data() }));
+  if (items.length === 0 && quizId === DEFAULT_QUIZ.quizId) {
+    const q = DEFAULT_QUIZ.questions.find(x => String(x.id) === String(questionId));
+    if (q) {
+      return q.options.map((o, idx) => ({ id: o.id ?? idx, optionText: o.optionText, is_correct: !!o.isCorrect, index: idx }));
+    }
+  }
+  return items;
 }
 
 // Create or update user
@@ -144,11 +225,23 @@ async function completeAttempt(attemptId) {
     if (chosen && (chosen.is_correct === true || chosen.isCorrect === true)) correct++;
   }
   const total = questions.length;
+  // Compute timeSpentSeconds now so we can both store it and return it immediately
+  let timeSpentSeconds = null;
+  try {
+    const start = att.startTime && att.startTime.toDate ? att.startTime.toDate().getTime() : (typeof att.startTime === 'number' ? att.startTime : null);
+    if (start) {
+      const deltaMs = Date.now() - start;
+      timeSpentSeconds = Math.max(0, Math.round(deltaMs / 1000));
+    }
+  } catch (_) { timeSpentSeconds = null; }
+
   await updateDoc(attDoc, {
     completed: true,
     endTime: serverTimestamp(),
     correctAnswers: correct,
-    totalQuestions: total
+    totalQuestions: total,
+    // store computed time spent so listing can show it without recompute
+    timeSpentSeconds: timeSpentSeconds
   });
   const score = Math.round((correct * 100) / (total || 1));
 
@@ -196,7 +289,18 @@ async function completeAttempt(attemptId) {
     console.warn('[users-rollup] update failed:', e?.message || e);
   }
 
-  return { correctAnswers: correct, totalQuestions: total, score };
+  // Try to read back the user's attemptsCount so the client can update immediately
+  let attemptsCount = null;
+  try {
+    const userId = att.userId;
+    if (userId != null && userId !== undefined) {
+      const uRef = doc(db, 'users', String(userId));
+      const uSnap2 = await getDoc(uRef);
+      if (uSnap2.exists()) attemptsCount = uSnap2.data().attemptsCount ?? null;
+    }
+  } catch (_) { attemptsCount = null; }
+
+  return { id: String(attemptId), correctAnswers: correct, totalQuestions: total, score, timeSpentSeconds, attemptsCount };
 }
 
 // Teacher: list attempts
@@ -210,6 +314,16 @@ async function listAttempts() {
     try { const qd = await getDoc(doc(db, 'quizzes', String(a.quizId))); quizTitle = qd.exists() ? (qd.data().title || `Quiz ${a.quizId}`) : `Quiz ${a.quizId}`; } catch {}
     let userInfo = {};
     try { const ud = await getDoc(doc(db, 'users', String(a.userId))); userInfo = ud.exists() ? ud.data() : {}; } catch {}
+    // Compute timeSpentSeconds for older attempts if not stored directly
+    let computedTimeSeconds = a.timeSpentSeconds;
+    try {
+      if ((computedTimeSeconds == null) && a.startTime && a.endTime) {
+        const s = a.startTime.toDate ? a.startTime.toDate().getTime() : (typeof a.startTime === 'number' ? a.startTime : null);
+        const e = a.endTime.toDate ? a.endTime.toDate().getTime() : (typeof a.endTime === 'number' ? a.endTime : null);
+        if (s != null && e != null) computedTimeSeconds = Math.max(0, Math.round((e - s) / 1000));
+      }
+    } catch (_) { /* ignore */ }
+
     return {
       id: d.id,
       quizId: a.quizId,
@@ -218,12 +332,16 @@ async function listAttempts() {
       username: userInfo.username,
       email: userInfo.email,
       fullName: userInfo.fullName,
+      // include attemptsCount from the user rollup (if available) so UIs can show total attempts
+      attemptsCount: userInfo.attemptsCount || 0,
       correctAnswers: a.correctAnswers,
       totalQuestions: a.totalQuestions,
       startTime: a.startTime?.toDate ? a.startTime.toDate().toISOString() : a.startTime,
       endTime: a.endTime?.toDate ? a.endTime.toDate().toISOString() : a.endTime,
+      // prefer stored timeSpentSeconds, otherwise use computed fallback
+      timeSpentSeconds: (computedTimeSeconds != null ? computedTimeSeconds : a.timeSpentSeconds),
       completed: !!a.completed,
-      timeSpentSeconds: a.timeSpentSeconds
+      
     };
   }));
   return attempts;
@@ -255,14 +373,30 @@ async function addQuestion(body) {
   const quizId = data.quizId || 1;
   const qId = data.orderNum; // use orderNum as question id to match UI expectations
   if (qId == null) return { error: 'orderNum (question number) is required' };
+  // Ensure quiz doc exists so we can update its metadata (updatedAt)
+  await ensureQuiz(quizId);
   // Check duplicate
   const qDoc = doc(db, 'quizzes', String(quizId), 'questions', String(qId));
   const qSnap = await getDoc(qDoc);
   if (qSnap.exists()) {
     throw new Error(`Question number ${qId} already exists`);
   }
+  // Coerce subjectId to a number safely; fallback to 1 (DBMS) only if parsing fails
+  let subjectId = 1;
+  try {
+    if (data.subjectId != null) {
+      const parsed = parseInt(String(data.subjectId), 10);
+      if (!Number.isNaN(parsed)) subjectId = parsed;
+    }
+  } catch (_) {}
+
+  // Debug: log the incoming payload when subjectId is unexpected
+  if (subjectId === 1 && data.subjectId != null && String(data.subjectId) !== '1') {
+    console.warn('[addQuestion] subjectId coerced to 1 from payload:', data.subjectId, 'full payload:', data);
+  }
+
   await setDoc(qDoc, {
-    subjectId: data.subjectId || 1,
+    subjectId: subjectId,
     orderNum: qId,
     points: data.points || 1,
     questionText: data.questionText
@@ -278,7 +412,14 @@ async function addQuestion(body) {
       is_correct: i === correctIndex
     });
   }
-  return { id: qId };
+  // Touch quiz metadata so clients can detect changes
+  try {
+    await updateDoc(doc(db, 'quizzes', String(quizId)), { updatedAt: serverTimestamp() });
+  } catch (e) {
+    // Non-fatal: if updating metadata fails, continue
+    console.warn('[addQuestion] failed to update quiz metadata:', e?.message || e);
+  }
+  return { id: qId, subjectId: subjectId };
 }
 
 // Teacher: delete question by order number
@@ -289,6 +430,12 @@ async function deleteQuestion(orderNum, quizId = 1) {
   await Promise.all(oSnap.docs.map(d => deleteDoc(d.ref)));
   // delete question
   await deleteDoc(qDoc);
+  // Touch quiz metadata so clients can detect changes
+  try {
+    await updateDoc(doc(db, 'quizzes', String(quizId)), { updatedAt: serverTimestamp() });
+  } catch (e) {
+    console.warn('[deleteQuestion] failed to update quiz metadata:', e?.message || e);
+  }
   return { ok: true };
 }
 

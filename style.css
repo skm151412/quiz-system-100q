@@ -232,6 +232,9 @@ h1 {
   -webkit-mask: 
     linear-gradient(#fff 0 0) content-box, 
     linear-gradient(#fff 0 0);
+    mask:
+        linear-gradient(#fff 0 0) content-box,
+        linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   pointer-events: none;
@@ -561,16 +564,21 @@ button:disabled {
     display: flex;
     justify-content: center;
     align-items: center;
-    height: 100vh;
-    background-color: #f4f4f4;
+    min-height: 100vh;
+    padding: 24px;
+    background:
+      radial-gradient(1000px 400px at -10% -20%, #ffffff 0%, transparent 60%),
+      radial-gradient(1000px 600px at 120% 0%, #e8f3ff 0%, transparent 60%),
+      linear-gradient(180deg, #f7fbff, #f3f6fb);
 }
 
+/* Legacy helper (kept for backward compatibility) */
 .prerequisite-box {
     background-color: white;
-    border-radius: 10px;
-    padding: 30px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    max-width: 500px;
+    border-radius: 14px;
+    padding: 26px;
+    box-shadow: 0 10px 30px rgba(2, 24, 55, 0.14);
+    max-width: 520px;
     width: 100%;
     text-align: center;
 }
@@ -647,12 +655,300 @@ button:disabled {
     padding: 20px;
 }
 
+/* ============== Improved Start Screen (Prerequisite) UI ============== */
+/* Layout card shown inside overlay that script.js injects as .prerequisite-content */
+.prerequisite-content {
+    width: 100%;
+    max-width: 920px;
+    background: #ffffff;
+    border: 1px solid #e6eef7;
+    border-radius: 16px;
+    box-shadow: 0 18px 60px rgba(21, 61, 116, 0.15);
+    padding: clamp(20px, 3vw, 28px);
+    box-sizing: border-box;
+}
+
+.prerequisite-content h2 {
+    font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif;
+    font-weight: 800;
+    letter-spacing: 0.2px;
+    font-size: clamp(1.25rem, 4vw, 1.75rem);
+    margin: 0 0 16px;
+}
+
+.quiz-details p { margin: 0 0 6px; color: #334155; }
+.quiz-details ul { margin: 8px 0 0; padding: 0; list-style: none; }
+.quiz-details li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #f8fafc;
+    border: 1px solid #eef2f7;
+    color: #334155;
+}
+
+/* Two-column list on wider screens for better height balance */
+@media (min-width: 720px){
+  .quiz-details ul { columns: 2; column-gap: 16px; }
+  .quiz-details li { break-inside: avoid; margin-bottom: 10px; }
+}
+
+.prerequisites-list { margin-top: 14px; }
+.prerequisites-list p { 
+    margin: 0 0 10px; 
+    color: #0f172a;
+    font-size: clamp(0.875rem, 2.5vw, 1rem);
+}
+.prerequisites-list ul { 
+    padding-left: 0; 
+    list-style: none;
+    margin: 0;
+}
+.prerequisites-list li { 
+    position: relative; 
+    padding: 10px 12px; 
+    border-radius: 10px; 
+    background: #fff; 
+    border: 1px dashed #e2e8f0; 
+    color: #334155;
+    font-size: clamp(0.875rem, 2.5vw, 1rem);
+    margin-bottom: 8px;
+}
+.prerequisites-list li strong { color: #0f172a; }
+.prerequisites-list p[style*="color: #ff4757"] { /* warning copy override */
+    background: #fff1f2;
+    border: 1px solid #fecdd3;
+    color: #b91c1c !important;
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: clamp(0.875rem, 2.5vw, 1rem);
+}
+
+/* Connection status banner */
+.flight-mode-indicator {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 2px solid #e2e8f0;
+    background: #f8fafc;
+    margin: 10px 0 14px;
+    flex-wrap: wrap;
+}
+.flight-mode-indicator .indicator-icon {
+    width: 36px; height: 36px; border-radius: 10px;
+    display: grid; place-items: center; font-size: 18px;
+    background: #0ea5e9; color: #fff;
+    flex-shrink: 0;
+}
+.flight-mode-indicator .connection-status { 
+    font-weight: 600; 
+    color: #0f172a; 
+    flex: 1 1 auto;
+    min-width: 150px;
+    font-size: clamp(0.875rem, 2.5vw, 1rem);
+}
+.flight-mode-indicator.online {
+    border-color: #fecaca;
+    background: #fee2e2;
+}
+.flight-mode-indicator.online .indicator-icon { background:#ef4444; }
+.flight-mode-indicator.offline {
+    border-color: #bbf7d0;
+    background: #dcfce7;
+}
+.flight-mode-indicator.offline .indicator-icon { background:#16a34a; }
+.flight-mode-indicator .recheck-btn { margin-left: auto; }
+
+/* Password area */
+.password-section {
+    background: linear-gradient(180deg, #ffffff, #f9fbff);
+    border: 1px solid #e6eef7 !important;
+    border-radius: 14px !important;
+    padding: 18px 16px !important;
+    margin-top: 14px;
+}
+.password-section label { 
+    font-weight: 700; 
+    color: #111827; 
+    font-size: 14px;
+    display: block;
+    margin-bottom: 8px;
+}
+.password-section input[type="password"]{
+    outline: none;
+    padding: 14px 14px;
+    border-radius: 10px;
+    border: 2px solid #e2e8f0;
+    background: #f8fafc;
+    transition: box-shadow .2s, border-color .2s;
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 16px;
+    margin-bottom: 12px;
+}
+.password-section input[type="password"]:focus {
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 3px rgba(96,165,250,.25);
+    background: #fff;
+}
+
+/* Start button on landing screen */
+#start-quiz-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #22c55e, #16a34a);
+    color: #fff;
+    font-weight: 800;
+    letter-spacing: .3px;
+    border: none;
+    cursor: pointer;
+    transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+}
+#start-quiz-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(22,163,74,.25); filter: saturate(1.05); }
+#start-quiz-btn:disabled { opacity: .65; cursor: not-allowed; background: #94a3b8; }
+
+/* Reusable buttons inside overlay (scoped to avoid conflicts elsewhere) */
+.prerequisite-content .btn { 
+        display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+        border: none; cursor: pointer; font-weight: 600; transition: all .18s ease;
+        border-radius: 10px; color:#fff; background:#64748b; padding: 10px 14px; font-size: 14px;
+}
+.prerequisite-content .btn:hover { filter: brightness(1.05); transform: translateY(-1px); }
+.prerequisite-content .btn:active { transform: translateY(0); }
+.prerequisite-content .btn:disabled { opacity:.65; cursor:not-allowed; }
+
+/* Color variants */
+.prerequisite-content .btn-info { background:#3498db; }
+.prerequisite-content .btn-info:hover { box-shadow: 0 6px 16px rgba(52,152,219,.28); }
+.prerequisite-content .btn-danger { background:#e74c3c; }
+.prerequisite-content .btn-danger:hover { box-shadow: 0 6px 16px rgba(231,76,60,.28); }
+
+/* Size variants */
+.prerequisite-content .btn-xs { padding: 6px 10px; font-size: 12px; border-radius: 8px; }
+.prerequisite-content .btn-sm { padding: 8px 12px; font-size: 14px; border-radius: 9px; }
+
+/* Smaller screens: keep things compact */
+@media (max-width: 520px){
+  .prerequisite-content { 
+    padding: 20px 16px;
+    border-radius: 12px;
+  }
+  .quiz-details ul { columns: 1; }
+  .flight-mode-indicator {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .flight-mode-indicator .connection-status {
+    min-width: 100%;
+  }
+  .flight-mode-indicator .recheck-btn {
+    margin-left: 0;
+    width: 100%;
+  }
+  .prerequisite-content h2 {
+    font-size: 1.25rem;
+  }
+  .password-section {
+    padding: 14px 12px !important;
+  }
+}
+
 /* Authentication Page Styles */
 .auth-container {
     width: 100%;
-    max-width: 480px;
-    padding: 20px;
+    max-width: 560px; /* widen the login card slightly */
+    padding: 16px;    /* slightly tighter padding to reduce height */
     animation: fadeInUp 0.5s ease;
+}
+
+/* Split-screen layout for login page */
+.auth-split {
+    width: 100vw;            /* span full viewport width */
+    max-width: 100vw;        /* prevent constraining */
+    min-height: 100vh;       /* fill height */
+    margin: 0;               /* no centering margins */
+    display: grid;
+    grid-template-columns: 75% 25%; /* image : login (requested ratio) */
+    gap: 0;
+    border-radius: 0;        /* edges flush with viewport */
+    overflow: hidden;
+    box-shadow: none;        /* remove outer shadow when full-bleed */
+}
+
+.auth-visual-side {
+    position: relative;
+    background: #0b1a26; /* fallback */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.auth-visual-side::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: url('logo.png');
+    background-size: cover;
+    background-position: center;
+    filter: drop-shadow(0 10px 30px rgba(0,0,0,0.35));
+}
+.auth-visual-side::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(60% 60% at 50% 40%, rgba(0, 224, 255, 0.12), transparent 60%),
+                linear-gradient(180deg, rgba(8, 23, 35, 0.2), rgba(8, 23, 35, 0.6));
+    pointer-events: none;
+}
+.auth-visual-badge {
+    position: relative;
+    z-index: 1;
+    color: #b9f3ff;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(185, 243, 255, 0.25);
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    backdrop-filter: blur(6px);
+}
+
+.auth-form-side {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end; /* push card to the right edge */
+    background: linear-gradient(180deg, #0f172a 0%, #0b1222 100%);
+    padding: clamp(16px, 2vw, 24px) 0 clamp(16px, 2vw, 24px) clamp(16px, 2vw, 24px);
+}
+
+/* Make existing card sit nicely in the right side */
+.auth-form-side .auth-card {
+    background: rgba(255, 255, 255, 0.98);
+    border-radius: 16px;
+    padding: clamp(20px, 2.6vw, 28px); /* smaller padding for shorter height */
+    box-shadow: 0 14px 36px rgba(0,0,0,0.18);
+}
+
+/* Replace emoji logo with image if available, fallback styles remain */
+.auth-logo img.auth-logo-img {
+    width: 96px; /* slightly smaller logo to reduce height */
+    height: auto;
+    display: block;
+    margin: 0 auto 4px auto;
+    filter: drop-shadow(0 6px 14px rgba(0,0,0,0.25));
+}
+@media (max-width: 980px) {
+    .auth-split { grid-template-columns: 1fr; min-height: auto; width: 100%; max-width: 100%; }
+    .auth-visual-side { height: 260px; }
 }
 
 @keyframes fadeInUp {
@@ -669,14 +965,14 @@ button:disabled {
 .auth-card {
     background: rgba(255, 255, 255, 0.95);
     backdrop-filter: blur(10px);
-    border-radius: 20px;
-    padding: 40px;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    border-radius: 16px;
+    padding: 28px; /* reduce to shorten overall height */
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
 }
 
 .auth-header {
     text-align: center;
-    margin-bottom: 30px;
+    margin-bottom: 18px; /* tighter header spacing */
 }
 
 .auth-logo {
@@ -712,7 +1008,7 @@ button:disabled {
 .auth-tabs {
     display: flex;
     gap: 10px;
-    margin-bottom: 30px;
+    margin-bottom: 20px; /* less vertical space */
     background: #f7fafc;
     padding: 6px;
     border-radius: 12px;
@@ -795,7 +1091,7 @@ button:disabled {
 }
 
 .form-group {
-    margin-bottom: 20px;
+    margin-bottom: 14px; /* compact form spacing */
 }
 
 .form-group label {

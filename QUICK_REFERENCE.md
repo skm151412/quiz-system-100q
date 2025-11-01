@@ -28,7 +28,7 @@
           ┌─────────────┐  ┌──────────────┐
           │   Teacher   │  │   Student    │
           │  Dashboard  │  │  Quiz Page   │
-          │ /teacher.html│  │ /index.html  │
+          │/teacher.html│  │ /index.html  │
           └─────────────┘  └──────────────┘
 ```
 
