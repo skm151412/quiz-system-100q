@@ -1,7 +1,8 @@
-// Set your backend origin for production (no Firebase Hosting rewrites)
-// Example for Cloud Run: https://quiz-backend-xxxxx-asia-south1.run.app
-// Example for a VM: https://your-domain.com
-// NOTE: Must include protocol (http/https). Do not include trailing slash.
+// Firebase-only deployment configuration
+// Set FIREBASE_MODE to true to route all API calls to Firestore via firebase-api.js
+// No separate backend origin is required when using Firebase only.
 
-// Using Cloudflare Quick Tunnel (temporary, no account). Keep the tunnel process running.
-window.QUIZ_BACKEND_BASE = 'https://easily-peninsula-runs-alot.trycloudflare.com';
+window.FIREBASE_MODE = true;
+// Ensure any stale cached configuration is cleared
+try { delete window.QUIZ_BACKEND_BASE; } catch (_) { window.QUIZ_BACKEND_BASE = undefined; }
+// window.QUIZ_BACKEND_BASE is intentionally unset for Firebase-only mode.

@@ -345,11 +345,13 @@
     </audio>
 
         <!-- Initialize Firebase (module) -->
-        <script type="module" src="firebase-init.js"></script>
-        <!-- Backend origin (set this file to your public backend URL since no rewrites) -->
-        <script src="backend-origin.js"></script>
-        <!-- Load the JavaScript that connects to the backend -->
-    <script src="script.js"></script>
+        <script type="module" src="firebase-init.js?v=20251029-2"></script>
+        <!-- Configure app to use Firebase-only mode -->
+        <script src="backend-origin.js?v=20251029-2"></script>
+        <!-- Firebase API shim (module) -->
+        <script type="module" src="firebase-api.js?v=20251029-2"></script>
+        <!-- Main application script -->
+    <script src="script.js?v=20251029-2"></script>
 </body>
 
 </html>

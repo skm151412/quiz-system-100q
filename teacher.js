@@ -28,6 +28,7 @@
     document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
     if(btn.dataset.tab==='attempts') loadAttempts();
     if(btn.dataset.tab==='addq') loadQuizAndSubjects(); // Load quizzes and subjects when tab switched
+    if(btn.dataset.tab==='users') loadUsers();
   }));
 
   document.getElementById('logoutBtn').addEventListener('click',()=>{
@@ -36,6 +37,12 @@
   });
 
   async function api(endpoint, options={}) {
+    // Route to Firebase shim if in Firebase-only mode
+    if (window.FIREBASE_MODE && typeof window.firebaseApiCall === 'function') {
+      const method = (options && options.method) || 'GET';
+      const body = (options && options.body) || null;
+      return await window.firebaseApiCall(endpoint + (endpoint.includes('?')?'&':'?') + 'userId='+encodeURIComponent(teacherCtx.userId), method, body);
+    }
     const url = API_BASE+endpoint + (endpoint.includes('?')?'&':'?') + 'userId='+encodeURIComponent(teacherCtx.userId);
     const opt = Object.assign({headers:{'Content-Type':'application/json'}}, options);
     const res = await fetch(url,opt);
@@ -292,4 +299,27 @@
   loadAttempts();
   // Also load quiz and subject data initially 
   loadQuizAndSubjects();
+  // Preload users in background
+  loadUsers();
+
+  async function loadUsers(){
+    try {
+      const list = await api('/teacher/users');
+      const tbody = document.querySelector('#usersTable tbody');
+      if (!tbody) return;
+      tbody.innerHTML = (list||[]).map(u=>`<tr>
+        <td>${escapeHtml(String(u.id))}</td>
+        <td>${escapeHtml(u.username||'-')}</td>
+        <td>${escapeHtml(u.fullName||'-')}</td>
+        <td>${escapeHtml(u.email||'-')}</td>
+        <td>${escapeHtml(u.role||'student')}</td>
+        <td>${u.attemptsCount||0}</td>
+        <td>${u.bestScore!=null?u.bestScore: '-'}</td>
+        <td>${u.lastScore!=null?u.lastScore: '-'}</td>
+        <td class="nowrap">${fmtDate(u.lastAttemptAt)}</td>
+      </tr>`).join('');
+    } catch(e){
+      console.error('Failed to load users', e);
+    }
+  }
 })();

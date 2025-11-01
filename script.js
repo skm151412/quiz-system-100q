@@ -214,7 +214,218 @@ document.addEventListener("DOMContentLoaded", function () {
     setInterval(checkInternetConnection, 3000); // Check every 3 seconds
 
     // API helper functions
+    // Ensure we don't fall back to /api when Firebase shim hasn't finished loading yet
+    function waitForFirebaseApi(timeoutMs = 5000) {
+        return new Promise((resolve, reject) => {
+            if (window.FIREBASE_MODE && typeof window.firebaseApiCall === 'function') {
+                return resolve();
+            }
+            let settled = false;
+            const onReady = () => {
+                if (!settled) {
+                    settled = true;
+                    window.removeEventListener('firebaseApiReady', onReady);
+                    resolve();
+                }
+            };
+            window.addEventListener('firebaseApiReady', onReady, { once: true });
+            const t = setTimeout(() => {
+                if (!settled) {
+                    settled = true;
+                    window.removeEventListener('firebaseApiReady', onReady);
+                    // Resolve anyway so caller can decide fallback behavior
+                    resolve();
+                }
+            }, timeoutMs);
+        });
+    }
+
+    // Simple offline cache for quiz data (prefetched while online)
+    const quizCache = {
+        loaded: false,
+        subjects: [],
+        questions: [],
+        optionsByQid: {}
+    };
+
+    // Load cache from localStorage if present
+    try {
+        const cached = JSON.parse(localStorage.getItem('quizCache_v1') || 'null');
+        if (cached && cached.questions && cached.subjects && cached.optionsByQid) {
+            Object.assign(quizCache, cached, { loaded: true });
+            console.log('[offline-cache] Restored quiz cache from localStorage');
+        }
+    } catch (_) {}
+
+    async function prefetchQuizDataIfOnline() {
+        if (!navigator.onLine) return; // only prefetch when online
+        try {
+            await waitForFirebaseApi(5000);
+            if (typeof window.firebaseApiCall !== 'function') return;
+            console.log('[offline-cache] Prefetching quiz data...');
+            const [subjects, questions] = await Promise.all([
+                window.firebaseApiCall('/quiz/subjects', 'GET'),
+                window.firebaseApiCall('/quiz/1/questions', 'GET')
+            ]);
+            const optionsByQidEntries = await Promise.all(questions.map(async q => {
+                const opts = await window.firebaseApiCall(`/quiz/questions/${q.id}/options`, 'GET');
+                return [String(q.id), opts];
+            }));
+            const optionsByQid = Object.fromEntries(optionsByQidEntries);
+            quizCache.subjects = Array.isArray(subjects) ? subjects : [];
+            quizCache.questions = Array.isArray(questions) ? questions : [];
+            quizCache.optionsByQid = optionsByQid;
+            quizCache.loaded = true;
+            try {
+                localStorage.setItem('quizCache_v1', JSON.stringify({
+                    subjects: quizCache.subjects,
+                    questions: quizCache.questions,
+                    optionsByQid: quizCache.optionsByQid
+                }));
+            } catch (_) {}
+            console.log(`[offline-cache] Prefetched ${quizCache.questions.length} questions`);
+        } catch (e) {
+            console.warn('[offline-cache] Prefetch failed:', e.message || e);
+        }
+    }
+
+    // attempt answers buffer for offline mode
+    const offlineAttempt = {
+        id: null,
+        answers: {},
+        completed: false,
+        result: null,
+        synced: false,
+        remoteAttemptId: null
+    };
+    let offlineUserPayload = null; // queued identification when offline
+
+    // Restore any persisted offline state
+    try {
+        const saved = JSON.parse(localStorage.getItem('offline_attempt_v1')||'null');
+        if (saved && typeof saved === 'object') Object.assign(offlineAttempt, saved);
+        const savedUser = JSON.parse(localStorage.getItem('offline_user_payload_v1')||'null');
+        if (savedUser) offlineUserPayload = savedUser;
+    } catch(_){}
+
+    function persistOfflineAttempt(){
+        try { localStorage.setItem('offline_attempt_v1', JSON.stringify(offlineAttempt)); } catch(_){}
+    }
+    function persistOfflineUserPayload(){
+        try { localStorage.setItem('offline_user_payload_v1', JSON.stringify(offlineUserPayload)); } catch(_){}
+    }
+
+    async function flushOfflineToFirestore(){
+        if (!navigator.onLine) return false;
+        await waitForFirebaseApi(7000);
+        if (typeof window.firebaseApiCall !== 'function') return false;
+        try {
+            // Identify user first if queued
+            if (offlineUserPayload) {
+                try {
+                    const savedUser = await window.firebaseApiCall('/users/identify','POST', offlineUserPayload);
+                    if (savedUser && savedUser.id) {
+                        currentUserId = savedUser.id;
+                    }
+                    offlineUserPayload = null;
+                    persistOfflineUserPayload();
+                } catch(e){ /* keep queued */ }
+            }
+
+            if (offlineAttempt.id && !offlineAttempt.synced) {
+                const userIdForSync = currentUserId || (offlineUserPayload && offlineUserPayload.id) || 3;
+                const started = await window.firebaseApiCall(`/quiz/1/start?userId=${encodeURIComponent(userIdForSync)}`, 'POST');
+                const remoteId = started && (started.id || started.attemptId || started.attempt_id);
+                if (!remoteId) return false;
+                offlineAttempt.remoteAttemptId = remoteId;
+                for (const [qid, sel] of Object.entries(offlineAttempt.answers||{})){
+                    await window.firebaseApiCall(`/quiz/attempts/${remoteId}/answer`, 'POST', {
+                        questionId: qid,
+                        selectedOptionId: sel
+                    });
+                }
+                if (offlineAttempt.completed) {
+                    await window.firebaseApiCall(`/quiz/attempts/${remoteId}/complete`, 'POST');
+                }
+                offlineAttempt.synced = true;
+                persistOfflineAttempt();
+            }
+            return true;
+        } catch (e) {
+            console.warn('[offline-sync] flush failed:', e.message||e);
+            return false;
+        }
+    }
+    window.addEventListener('online', () => { flushOfflineToFirestore(); });
+
     async function apiCall(endpoint, method = 'GET', body = null) {
+        // In Firebase-only mode, route through firebase-api shim (wait for it if needed)
+        if (window.FIREBASE_MODE) {
+            if (typeof window.firebaseApiCall !== 'function') {
+                await waitForFirebaseApi(7000);
+            }
+            // If offline, serve from cache for supported endpoints
+            if (!navigator.onLine) {
+                const path = endpoint.split('?')[0];
+                // GET subjects/questions/options from cache
+                if (method === 'GET' && path === '/quiz/subjects') {
+                    if (!quizCache.loaded) throw new Error('Offline: quiz not cached yet');
+                    return quizCache.subjects.length ? quizCache.subjects : [
+                        { id: 1, name: 'DBMS', color: '#000000' },
+                        { id: 2, name: 'FEDF', color: '#FF6B6B' },
+                        { id: 3, name: 'OOP', color: '#4ECDC4' },
+                        { id: 4, name: 'OS',  color: '#45B7D1' }
+                    ];
+                }
+                if (method === 'GET' && path === '/quiz/1/questions') {
+                    if (!quizCache.loaded) throw new Error('Offline: quiz not cached yet');
+                    return quizCache.questions;
+                }
+                const optMatch = path.match(/^\/quiz\/questions\/(.+)\/options$/);
+                if (method === 'GET' && optMatch) {
+                    if (!quizCache.loaded) throw new Error('Offline: quiz not cached yet');
+                    return quizCache.optionsByQid[String(optMatch[1])] || [];
+                }
+                // POST start -> fabricate attempt id locally
+                if (method === 'POST' && /^\/quiz\/1\/start$/.test(path)) {
+                    offlineAttempt.id = 'local-' + Date.now();
+                    offlineAttempt.answers = {};
+                    return { id: offlineAttempt.id };
+                }
+                // POST answer -> store locally
+                const ansMatch = path.match(/^\/quiz\/attempts\/(.+)\/answer$/);
+                if (method === 'POST' && ansMatch) {
+                    const payload = (typeof body === 'string') ? JSON.parse(body || '{}') : (body || {});
+                    const qid = payload.questionId ?? payload.question_id;
+                    const selected = payload.selectedOptionId ?? payload.selected_id ?? payload.selectedIndex;
+                    if (qid == null) throw new Error('Offline: missing questionId');
+                    offlineAttempt.answers[String(qid)] = selected;
+                    return { ok: true };
+                }
+                // POST complete -> compute score from cache
+                const compMatch = path.match(/^\/quiz\/attempts\/(.+)\/complete$/);
+                if (method === 'POST' && compMatch) {
+                    if (!quizCache.loaded) throw new Error('Offline: quiz not cached yet');
+                    let correct = 0;
+                    const total = quizCache.questions.length;
+                    for (const q of quizCache.questions) {
+                        const sel = offlineAttempt.answers[String(q.id)];
+                        const opts = quizCache.optionsByQid[String(q.id)] || [];
+                        const chosen = opts.find(o => String(o.id) === String(sel));
+                        if (chosen && (chosen.isCorrect === true || chosen.is_correct === true)) correct++;
+                    }
+                    return { correctAnswers: correct, totalQuestions: total, score: Math.round((correct * 100) / (total || 1)) };
+                }
+                // Any other endpoint not supported offline
+                throw new Error('Offline: endpoint not available');
+            }
+            // Online normal path via firebase shim
+            if (typeof window.firebaseApiCall === 'function') {
+                return await window.firebaseApiCall(endpoint, method, body);
+            }
+            // If still not available, throw an explicit error rather than hitting unknown /api
+            throw new Error('Firebase API not ready');
+        }
         try {
             const options = {
                 method,
@@ -345,6 +556,9 @@ document.addEventListener("DOMContentLoaded", function () {
                 updateQuizStartButton();
             }, 1000);
         }, 500);
+
+        // Kick off background prefetch while the user is online on the landing screen
+        prefetchQuizDataIfOnline();
 
         // Make functions global
         window.forceConnectionCheck = function() {
@@ -590,6 +804,18 @@ document.addEventListener("DOMContentLoaded", function () {
                 console.log('User record persisted/identified:', savedUser);
             } catch (persistErr) {
                 console.warn('User identify call failed, proceeding anyway:', persistErr.message);
+                // Queue user payload for sync when back online
+                try {
+                    offlineUserPayload = {
+                        username: currentUsername || String(currentUserId),
+                        email: currentUserEmail,
+                        fullName: currentUserFullName,
+                        role: currentUserRole,
+                        externalId: currentUserId,
+                        id: currentUserId
+                    };
+                    persistOfflineUserPayload();
+                } catch(_){}
             }
 
             console.log('User identification confirmed:', { currentUserId, currentUserRole, currentUsername, currentUserFullName, currentUserEmail });
@@ -986,6 +1212,10 @@ document.addEventListener("DOMContentLoaded", function () {
                         questionId: parseInt(questionId),
                         selectedOptionId: parseInt(selectedOptionId)
                     });
+                    if (!navigator.onLine) { // persist local buffer while offline
+                        offlineAttempt.answers[String(parseInt(questionId))] = parseInt(selectedOptionId);
+                        persistOfflineAttempt();
+                    }
                 } catch (error) {
                     console.error('Failed to save answer:', error);
                 }
@@ -1123,6 +1353,14 @@ document.addEventListener("DOMContentLoaded", function () {
             const warningOverlay = document.getElementById('auto-submit-warning');
             if (warningOverlay) warningOverlay.remove();
             const result = await apiCall(`/quiz/attempts/${attemptId}/complete`, 'POST');
+            if (!navigator.onLine) {
+                offlineAttempt.completed = true;
+                offlineAttempt.result = result;
+                persistOfflineAttempt();
+            } else {
+                // If back online, try to flush any pending offline data
+                flushOfflineToFirestore();
+            }
 
             // Adapt result shape for UI
             const adapted = {
