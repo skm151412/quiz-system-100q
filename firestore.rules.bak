@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Public read-only quiz metadata
+    match /subjects/{subjectId} {
+      allow read: if true;
+      // Only teachers can write subjects
+      allow write: if isTeacher();
+    }
+
+    // Quizzes and nested questions/options
+    match /quizzes/{quizId} {
+      allow read: if true; // students need to read quiz metadata
+      allow write: if isTeacher();
+
+      match /questions/{questionId} {
+        allow read: if true;
+        allow write: if isTeacher();
+
+        match /options/{optionId} {
+          allow read: if true;
+          allow write: if isTeacher();
+        }
+      }
+    }
+
+    // Users collection keyed by auth uid
+    match /users/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId || isTeacher();
+      // Users can create/update their own profile document; teachers can update any
+      allow write: if request.auth != null && (request.auth.uid == userId || isTeacher());
+    }
+
+    // Attempts: users can create/read/update only their own attempt docs
+    match /attempts/{attemptId} {
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      // Allow read/update if this attempt belongs to the current user, or teacher for analytics
+      allow read, update: if request.auth != null && (resource.data.userId == request.auth.uid || isTeacher());
+
+      match /answers/{answerId} {
+        allow read: if request.auth != null && (get(/databases/$(database)/documents/attempts/$(attemptId)).data.userId == request.auth.uid || isTeacher());
+        allow write: if request.auth != null && request.auth.uid == get(/databases/$(database)/documents/attempts/$(attemptId)).data.userId;
+      }
+    }
+
+    function isTeacher() {
+      return request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+    }
+  }
+}

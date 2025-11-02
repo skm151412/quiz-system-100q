@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Teacher Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="teacher.css" />
+</head>
+<body>
+  <header>
+    <h1>Teacher Dashboard <span id="teacherEmail" class="badge"></span></h1>
+    <nav>
+      <button data-tab="attempts" class="active">Attempts</button>
+      <button data-tab="addq">Add Question</button>
+      <button data-tab="deleteq">Delete Question</button>
+      <button data-tab="users">Users</button>
+      <button id="logoutBtn" title="Return to landing">Logout</button>
+    </nav>
+  </header>
+  <main>
+    <section id="tab-attempts" class="active">
+      <div class="toolbar">
+        <div><input type="text" id="searchStudent" placeholder="Search student (email / username / id)"></div>
+        <div><input type="text" id="filterQuiz" placeholder="Filter quiz title"></div>
+        <div><select id="completionFilter"><option value="all">All Status</option><option value="completed">Completed</option><option value="inprogress">In Progress</option></select></div>
+        <div>
+          <select id="scoreFilter">
+            <option value="all">All Scores</option>
+            <option value="50">≥ 50%</option>
+            <option value="60">≥ 60%</option>
+            <option value="70">≥ 70%</option>
+            <option value="80">≥ 80%</option>
+            <option value="90">≥ 90%</option>
+            <option value="100">100%</option>
+          </select>
+        </div>
+        <div>
+          <select id="sortBy">
+            <option value="default">Default sort</option>
+            <option value="score-desc">Sort by Score (high → low)</option>
+            <option value="score-asc">Sort by Score (low → high)</option>
+          </select>
+        </div>
+        <div class="stat" id="statAttempts">Attempts: 0</div>
+        <div class="stat" id="statAvg">Avg %: 0</div>
+      </div>
+      <div class="table-wrapper">
+        <div class="table-scroller">
+          <table id="attemptTable">
+            <thead>
+              <tr>
+                <th data-sort="student">Student</th>
+                <th data-sort="name">Full Name</th>
+                <th data-sort="quiz">Quiz</th>
+                <th data-sort="score">Score</th>
+                <th data-sort="percent">Percent</th>
+                <th data-sort="attempts">Attempts</th>
+                <th data-sort="time">Time (s)</th>
+                <th data-sort="start">Started</th>
+                <th data-sort="end">Ended</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section id="tab-addq">
+      <h2>Add Question</h2>
+      <form id="addQuestionForm">
+        <div class="row">
+          <div><label>Quiz Name<select name="quizId" required>
+              <option value="1">Main Quiz</option>
+          </select></label></div>
+          <div><label>Subject<select name="subjectId" required>
+              <option value="1">DBMS</option>
+              <option value="2">FEDF</option>
+              <option value="3">OOP</option>
+              <option value="4">OS</option>
+          </select></label></div>
+          <div><label>Question Number (must be unique)<input type="number" name="orderNum" value="0" title="Important: This number must be unique and will become both the ID and question number shown to students"></label></div>
+          <div><label>Points Value<input type="number" name="points" value="1"></label></div>
+        </div>
+        <label>Question Text<textarea name="questionText" rows="3" required></textarea></label>
+        <div class="row">
+          <div><label>Option A<input type="text" name="opt0" required></label></div>
+          <div><label>Option B<input type="text" name="opt1" required></label></div>
+        </div>
+        <div class="row">
+          <div><label>Option C<input type="text" name="opt2"></label></div>
+          <div><label>Option D<input type="text" name="opt3"></label></div>
+        </div>
+        <div class="row">
+          <div><label>Option E<input type="text" name="opt4"></label></div>
+          <div></div>
+        </div>
+        <label>Correct Answer<select name="correctIndex" required>
+          <option value="0">Option A</option>
+          <option value="1">Option B</option>
+          <option value="2">Option C</option>
+          <option value="3">Option D</option>
+          <option value="4">Option E</option>
+        </select></label>
+        <button type="submit">Save Question</button>
+        <div id="addQMsg" class="mini"></div>
+      </form>
+      <p class="muted" style="margin-top:16px;">
+        <strong>Tips:</strong><br>
+        • <strong>Question Number must be unique</strong> - the system will show an error if you try to use a number that already exists<br>
+        • Question Number determines the order questions appear to students<br>
+        • You must provide at least options A and B<br>
+        • Select which option is correct using the dropdown above
+      </p>
+    </section>
+    <section id="tab-deleteq">
+      <h2>Delete Question</h2>
+      <form id="deleteQuestionForm" class="inline">
+        <label>Question Number <input type="number" name="questionId" required placeholder="Enter question number to remove"></label>
+        <button type="submit" class="danger">Delete</button>
+      </form>
+      <div id="delQMsg" class="mini"></div>
+      <p class="muted">
+        <strong>Warning:</strong> Deleting a question cannot be undone and removes all associated options and student answers.
+        <br>
+        <strong>Enter the Question Number</strong> shown to students (e.g., if you want to delete Question 101, enter "101").
+      </p>
+    </section>
+    <section id="tab-users">
+      <h2>Users</h2>
+      <div class="table-wrapper">
+        <div class="table-scroller">
+          <table id="usersTable">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Username</th>
+                <th>Full Name</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Attempts</th>
+                <th>Best %</th>
+                <th>Last %</th>
+                <th>Last Attempt</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+  <!-- Initialize Firebase and enable Firebase-only mode -->
+  <script type="module" src="firebase-init.js?v=20251030-3"></script>
+  <script src="backend-origin.js?v=20251030-1"></script>
+  <script type="module" src="firebase-api.js?v=20251030-3"></script>
+  <!-- Auth module required for teacher.js role protection -->
+  <script src="auth.js?v=20251030-1"></script>
+  <script src="teacher.js?v=20251030-1"></script>
+</body>
+</html>
