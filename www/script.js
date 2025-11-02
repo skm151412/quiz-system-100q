@@ -226,11 +226,20 @@ document.addEventListener("DOMContentLoaded", function () {
                 startButton.textContent = 'Turn off Internet to Start Quiz';
                 console.log('Start button disabled - internet detected');
             } else {
-                startButton.disabled = false;
-                startButton.style.backgroundColor = '';
-                startButton.style.cursor = '';
-                startButton.textContent = 'Start 100-Question Quiz';
-                console.log('Start button enabled - flight mode active');
+                // Require quiz cache to be ready before allowing offline start
+                if (!quizCache.loaded) {
+                    startButton.disabled = true;
+                    startButton.style.backgroundColor = '#ccc';
+                    startButton.style.cursor = 'not-allowed';
+                    startButton.textContent = 'Connect once to cache quiz, then turn off Internet';
+                    console.log('Start disabled - offline but quiz cache not ready');
+                } else {
+                    startButton.disabled = false;
+                    startButton.style.backgroundColor = '';
+                    startButton.style.cursor = '';
+                    startButton.textContent = 'Start 100-Question Quiz';
+                    console.log('Start button enabled - flight mode active and cache ready');
+                }
             }
         } else {
             console.log('Warning: start button not found');
@@ -1300,6 +1309,13 @@ document.addEventListener("DOMContentLoaded", function () {
             if (connectionStatus.online) {
                 alert('❗ Please turn off your internet connection (enable flight mode) before starting the quiz.');
                 console.log('Quiz start blocked: Connection detected');
+                return;
+            }
+
+            // Ensure quiz cache is ready before starting fully offline
+            if (!quizCache.loaded) {
+                alert('Quiz content not cached yet. Please connect to the internet once to prefetch questions, then turn off internet and try again.');
+                console.log('Quiz start blocked: offline cache not ready');
                 return;
             }
 

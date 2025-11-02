@@ -1,3 +1,4 @@
+
 const CACHE_NAME = 'quiz-app-cache-v1';
 const ASSETS = [
   '/',
