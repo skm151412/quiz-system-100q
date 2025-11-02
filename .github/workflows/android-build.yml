@@ -42,3 +42,24 @@ jobs:
         with:
           name: quiz-system-100q-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Create GitHub release and upload APK
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: apk-build-${{ github.run_id }}
+          release_name: "APK build ${{ github.run_id }}"
+          draft: false
+          prerelease: false
+
+      - name: Upload APK to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: android/app/build/outputs/apk/debug/app-debug.apk
+          asset_name: quiz-system-100q.apk
+          asset_content_type: application/vnd.android.package-archive
