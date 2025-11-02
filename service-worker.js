@@ -1,3 +1,4 @@
+
 const CACHE_NAME = 'quiz-app-cache-v1';
 const ASSETS = [
   '/',
@@ -26,17 +27,13 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET') return; 
 
-  // Bypass caching for requests to Firebase/Google endpoints (always network-first)
-  const bypassHosts = ['www.googleapis.com', 'firestore.googleapis.com', 'www.gstatic.com', 'firebase.googleapis.com', 'firebasestorage.googleapis.com', 'storage.googleapis.com'];
-  if (bypassHosts.includes(url.hostname) || url.hostname.endsWith('.googleapis.com') || url.hostname.endsWith('.gstatic.com')) {
-    event.respondWith(
-      fetch(event.request).catch(() => caches.match(event.request))
-    );
-    return;
+  // Skip handling cross-origin requests (e.g., Firebase CDN/Firestore)
+  if (url.origin !== self.location.origin) {
+    return; // let the network handle it directly
   }
 
-  // Network-first for API calls and dynamic content on same origin
-  if (url.origin === self.location.origin && (url.pathname.startsWith('/api') || url.pathname.includes('/quiz/'))) {
+  // Network-first for API calls and dynamic content
+  if (url.pathname.startsWith('/api') || url.pathname.includes('/quiz/')) {
     event.respondWith(
       fetch(event.request).catch(() => caches.match(event.request))
     );

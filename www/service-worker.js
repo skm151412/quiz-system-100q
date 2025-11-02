@@ -26,6 +26,11 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET') return; 
 
+  // Skip handling cross-origin requests (e.g., Firebase CDN/Firestore)
+  if (url.origin !== self.location.origin) {
+    return; // let the network handle it directly
+  }
+
   // Network-first for API calls and dynamic content
   if (url.pathname.startsWith('/api') || url.pathname.includes('/quiz/')) {
     event.respondWith(

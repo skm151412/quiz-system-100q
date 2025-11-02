@@ -1358,11 +1358,23 @@ document.addEventListener("DOMContentLoaded", function () {
             const allOptions = await Promise.all(optionPromises);
 
             // Adapt data to expected shape in the UI
+            // Fisher–Yates shuffle for options to ensure randomization even offline
+            function shuffleArray(arr) {
+                const a = arr.slice();
+                for (let i = a.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [a[i], a[j]] = [a[j], a[i]];
+                }
+                return a;
+            }
+
             const adaptedQuestions = questions.map((q, idx) => {
                 const subjectId = q.subjectId || q.subject_id;
                 const subject = subjectById.get(subjectId) || { id: subjectId, name: q.subjectName || 'Subject', color: q.subjectColor || subjectColors[subjectId] || '#999' };
                 const optionsRaw = allOptions[idx] || [];
-                const options = optionsRaw.map(o => ({
+                // Shuffle options to maintain random order regardless of network status
+                const shuffled = shuffleArray(optionsRaw);
+                const options = shuffled.map(o => ({
                     id: o.id,
                     option_text: o.optionText || o.option_text,
                     is_correct: (o.isCorrect !== undefined ? o.isCorrect : o.is_correct)

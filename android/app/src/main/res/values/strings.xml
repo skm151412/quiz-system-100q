@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">QuizApp</string>
-    <string name="title_activity_main">QuizApp</string>
-    <string name="package_name">com.quizapp</string>
-    <string name="custom_url_scheme">com.quizapp</string>
+    <string name="app_name">Quiz System 100Q</string>
+    <string name="title_activity_main">Quiz System 100Q</string>
+    <string name="package_name">com.quiz100.app</string>
+    <string name="custom_url_scheme">com.quiz100.app</string>
 </resources>
